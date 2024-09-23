@@ -296,6 +296,17 @@ impl Type {
         })
     }
 
+    /// Constructor for the type of the `r:` fragment.
+    pub const fn cast_drop(self) -> Result<Self, ErrorKind> {
+        Ok(Type {
+            corr: match Correctness::cast_drop(self.corr) {
+                Ok(x) => x,
+                Err(e) => return Err(e),
+            },
+            mall: Malleability::cast_drop(self.mall),
+        })
+    }
+
     /// Constructor for the type of the `j:` fragment.
     pub const fn cast_nonzero(self) -> Result<Self, ErrorKind> {
         Ok(Type {
@@ -471,6 +482,7 @@ impl Type {
             Terminal::Check(ref sub) => wrap_err(Self::cast_check(sub.ty)),
             Terminal::DupIf(ref sub) => wrap_err(Self::cast_dupif(sub.ty)),
             Terminal::Verify(ref sub) => wrap_err(Self::cast_verify(sub.ty)),
+            Terminal::Drop(ref sub) => wrap_err(Self::cast_drop(sub.ty)),
             Terminal::NonZero(ref sub) => wrap_err(Self::cast_nonzero(sub.ty)),
             Terminal::ZeroNotEqual(ref sub) => wrap_err(Self::cast_zeronotequal(sub.ty)),
             Terminal::AndB(ref l, ref r) => {

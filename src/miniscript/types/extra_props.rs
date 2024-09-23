@@ -488,6 +488,12 @@ impl ExtData {
         }
     }
 
+    /// Extra properties for the `r:` fragment.
+    pub fn cast_drop(self) -> Self {
+        // delegate to `cast_verify` as the properties are the same
+        self.cast_verify()
+    }
+
     /// Extra properties for the `j:` fragment.
     pub const fn cast_nonzero(self) -> Self {
         ExtData {
@@ -947,6 +953,7 @@ impl ExtData {
             Terminal::Check(ref sub) => Self::cast_check(sub.ext),
             Terminal::DupIf(ref sub) => Self::cast_dupif(sub.ext),
             Terminal::Verify(ref sub) => Self::cast_verify(sub.ext),
+            Terminal::Drop(ref sub) => Self::cast_drop(sub.ext),
             Terminal::NonZero(ref sub) => Self::cast_nonzero(sub.ext),
             Terminal::ZeroNotEqual(ref sub) => Self::cast_zeronotequal(sub.ext),
             Terminal::AndB(ref l, ref r) => {

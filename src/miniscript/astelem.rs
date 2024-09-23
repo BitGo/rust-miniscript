@@ -193,6 +193,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Terminal<Pk, Ctx> {
                 .push_astelem(sub)
                 .push_opcode(opcodes::all::OP_ENDIF),
             Terminal::Verify(ref sub) => builder.push_astelem(sub).push_verify(),
+            Terminal::Drop(ref sub) => builder.push_astelem(sub).push_opcode(opcodes::all::OP_DROP),
             Terminal::NonZero(ref sub) => builder
                 .push_opcode(opcodes::all::OP_SIZE)
                 .push_opcode(opcodes::all::OP_0NOTEQUAL)

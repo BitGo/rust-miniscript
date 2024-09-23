@@ -1338,6 +1338,7 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfaction<Placeholder<Pk>> {
             | Terminal::Swap(ref sub)
             | Terminal::Check(ref sub)
             | Terminal::Verify(ref sub)
+            | Terminal::Drop(ref sub)
             | Terminal::NonZero(ref sub)
             | Terminal::ZeroNotEqual(ref sub) => {
                 Self::satisfy_helper(&sub.node, stfr, root_has_sig, leaf_hash, min_fn, thresh_fn)
@@ -1647,6 +1648,7 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfaction<Placeholder<Pk>> {
             | Terminal::Older(_)
             | Terminal::After(_)
             | Terminal::Verify(_)
+            | Terminal::Drop(_)
             | Terminal::OrC(..) => Satisfaction {
                 stack: Witness::Impossible,
                 has_sig: false,

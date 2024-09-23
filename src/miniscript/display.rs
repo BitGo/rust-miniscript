@@ -82,6 +82,7 @@ impl<'a, Pk: MiniscriptKey, Ctx: ScriptContext> TreeLike for DisplayNode<'a, Pk,
                 | Terminal::Swap(ref sub)
                 | Terminal::DupIf(ref sub)
                 | Terminal::Verify(ref sub)
+                | Terminal::Drop(ref sub)
                 | Terminal::NonZero(ref sub)
                 | Terminal::ZeroNotEqual(ref sub) => {
                     Tree::Unary(DisplayNode::Node(sub.ty, sub.as_inner()))
@@ -256,6 +257,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Terminal<Pk, Ctx> {
             Terminal::Check(..) => "c",
             Terminal::DupIf(..) => "d",
             Terminal::Verify(..) => "v",
+            Terminal::Drop(..) => "r",
             Terminal::NonZero(..) => "j",
             Terminal::ZeroNotEqual(..) => "n",
             Terminal::AndV(_, ref r) if matches!(r.as_inner(), Terminal::True) => "t",

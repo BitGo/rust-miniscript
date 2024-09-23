@@ -250,6 +250,10 @@ impl CompilerExtData {
         CompilerExtData { branch_prob: None, sat_cost: self.sat_cost, dissat_cost: None }
     }
 
+    fn cast_drop(self) -> Self {
+        CompilerExtData { branch_prob: None, sat_cost: 0.0, dissat_cost: None }
+    }
+
     fn cast_nonzero(self) -> Self {
         CompilerExtData { branch_prob: None, sat_cost: self.sat_cost, dissat_cost: Some(1.0) }
     }
@@ -449,6 +453,7 @@ impl CompilerExtData {
             Terminal::Check(ref sub) => Self::cast_check(get_child(&sub.node, 0)),
             Terminal::DupIf(ref sub) => Self::cast_dupif(get_child(&sub.node, 0)),
             Terminal::Verify(ref sub) => Self::cast_verify(get_child(&sub.node, 0)),
+            Terminal::Drop(ref sub) => Self::cast_drop(get_child(&sub.node, 0)),
             Terminal::NonZero(ref sub) => Self::cast_nonzero(get_child(&sub.node, 0)),
             Terminal::ZeroNotEqual(ref sub) => Self::cast_zeronotequal(get_child(&sub.node, 0)),
             Terminal::AndB(ref l, ref r) => {

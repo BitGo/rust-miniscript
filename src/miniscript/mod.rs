@@ -103,6 +103,7 @@ mod private {
                     Terminal::Check(..) => Terminal::Check(stack.pop().unwrap()),
                     Terminal::DupIf(..) => Terminal::DupIf(stack.pop().unwrap()),
                     Terminal::Verify(..) => Terminal::Verify(stack.pop().unwrap()),
+                    Terminal::Drop(..) => Terminal::Drop(stack.pop().unwrap()),
                     Terminal::NonZero(..) => Terminal::NonZero(stack.pop().unwrap()),
                     Terminal::ZeroNotEqual(..) => Terminal::ZeroNotEqual(stack.pop().unwrap()),
                     Terminal::AndV(..) => {
@@ -236,6 +237,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Miniscript<Pk, Ctx> {
                 Terminal::After(n) => script_num_size(n.to_consensus_u32() as usize) + 1,
                 Terminal::Older(n) => script_num_size(n.to_consensus_u32() as usize) + 1,
                 Terminal::Verify(ref sub) => usize::from(!sub.ext.has_free_verify),
+                Terminal::Drop(..) => 1,
                 Terminal::Thresh(ref thresh) => {
                     script_num_size(thresh.k()) // k
                         + 1 // EQUAL
@@ -573,6 +575,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Miniscript<Pk, Ctx> {
                 Terminal::Check(..) => Terminal::Check(translated.pop().unwrap()),
                 Terminal::DupIf(..) => Terminal::DupIf(translated.pop().unwrap()),
                 Terminal::Verify(..) => Terminal::Verify(translated.pop().unwrap()),
+                Terminal::Drop(..) => Terminal::Drop(translated.pop().unwrap()),
                 Terminal::NonZero(..) => Terminal::NonZero(translated.pop().unwrap()),
                 Terminal::ZeroNotEqual(..) => Terminal::ZeroNotEqual(translated.pop().unwrap()),
                 Terminal::AndV(..) => {
@@ -638,6 +641,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Miniscript<Pk, Ctx> {
                 Terminal::Check(..) => Terminal::Check(stack.pop().unwrap()),
                 Terminal::DupIf(..) => Terminal::DupIf(stack.pop().unwrap()),
                 Terminal::Verify(..) => Terminal::Verify(stack.pop().unwrap()),
+                Terminal::Drop(..) => Terminal::Drop(stack.pop().unwrap()),
                 Terminal::NonZero(..) => Terminal::NonZero(stack.pop().unwrap()),
                 Terminal::ZeroNotEqual(..) => Terminal::ZeroNotEqual(stack.pop().unwrap()),
                 Terminal::AndV(..) => Terminal::AndV(stack.pop().unwrap(), stack.pop().unwrap()),
@@ -749,6 +753,7 @@ where
             'c' => unwrapped = Terminal::Check(Arc::new(ms)),
             'd' => unwrapped = Terminal::DupIf(Arc::new(ms)),
             'v' => unwrapped = Terminal::Verify(Arc::new(ms)),
+            'r' => unwrapped = Terminal::Drop(Arc::new(ms)),
             'j' => unwrapped = Terminal::NonZero(Arc::new(ms)),
             'n' => unwrapped = Terminal::ZeroNotEqual(Arc::new(ms)),
             't' => unwrapped = Terminal::AndV(Arc::new(ms), Arc::new(Miniscript::TRUE)),
@@ -1222,6 +1227,15 @@ mod tests {
         assert_eq!(abs.minimum_n_keys(), Some(3));
 
         roundtrip(&ms_str!("older(921)"), "OP_PUSHBYTES_2 9903 OP_CSV");
+        roundtrip(
+            &ms_str!("and_v(r:after(1024),1)"),
+            "OP_PUSHBYTES_2 0004 OP_CLTV OP_DROP OP_PUSHNUM_1",
+        );
+        roundtrip(
+            &ms_str!("and_v(r:older(1024),1)"),
+            "OP_PUSHBYTES_2 0004 OP_CSV OP_DROP OP_PUSHNUM_1",
+        );
+        roundtrip(&ms_str!("and_v(r:1,1)"), "OP_PUSHNUM_1 OP_DROP OP_PUSHNUM_1");
 
         roundtrip(
             &ms_str!("sha256({})",sha256::Hash::hash(&[])),
@@ -1479,6 +1493,45 @@ mod tests {
         type TapMs = Miniscript<String, Tap>;
         let ms_str = TapMs::from_str_insane("j:multi_a(1,A,B,C)");
         assert!(ms_str.is_err());
+    }
+
+    #[test]
+    fn drop_wrapper() {
+        type SwMs = Miniscript<String, Segwitv0>;
+        fn assert_error(s: &str, expected_error: Option<&str>) {
+            match SwMs::from_str_insane(&s) {
+                Ok(_) => match expected_error {
+                    Some(e) => {
+                        panic!("Expected error: {}", e);
+                    }
+                    None => {
+                        // do nothing
+                    }
+                },
+                Err(e1) => match expected_error {
+                    Some(e2) => assert_eq!(e1.to_string(), e2.to_string()),
+                    None => {
+                        panic!("Unexpected error: {}", e1);
+                    }
+                },
+            }
+        }
+
+        {
+            assert_error("and_v(r:after(1024),1)", None);
+        }
+
+        {
+            fn assert_error_cannot_wrap(s: &str, prefix: &str) {
+                let err_cannot_wrap = format!(
+                    "typecheck: fragment «{}:after(1024)» cannot wrap a fragment of type V",
+                    prefix
+                );
+                assert_error(s, Some(&err_cannot_wrap));
+            }
+            assert_error_cannot_wrap("and_v(rr:after(1024),1)", "rr");
+            assert_error_cannot_wrap("and_v(rv:after(1024),1)", "rv");
+        }
     }
 
     #[test]
