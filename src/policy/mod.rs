@@ -135,6 +135,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Liftable<Pk> for Miniscript<Pk, Ctx>
                 | Terminal::Check(..)
                 | Terminal::DupIf(..)
                 | Terminal::Verify(..)
+                | Terminal::Drop(..)
                 | Terminal::NonZero(..)
                 | Terminal::ZeroNotEqual(..) => stack.pop().unwrap(),
                 Terminal::AndV(..) | Terminal::AndB(..) => Arc::new(Semantic::Thresh(

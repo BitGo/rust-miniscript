@@ -141,9 +141,15 @@ impl Malleability {
         }
     }
 
-    /// Constructor for the malleabilitiy properties of the `v:` fragment.
+    /// Constructor for the malleability properties of the `v:` fragment.
     pub const fn cast_verify(self) -> Self {
         Malleability { dissat: Dissat::None, safe: self.safe, non_malleable: self.non_malleable }
+    }
+
+    /// Constructor for the malleability properties of the `r:` fragment.
+    pub const fn cast_drop(self) -> Self {
+        // delegate to `cast_verify()`
+        self.cast_verify()
     }
 
     /// Constructor for the malleabilitiy properties of the `j:` fragment.

@@ -1414,7 +1414,7 @@ mod tests {
     use bitcoin::hashes::hex::FromHex;
     use bitcoin::key::XOnlyPublicKey;
     use bitcoin::secp256k1::PublicKey;
-    use bitcoin::{Amount, OutPoint, TxIn, TxOut};
+    use bitcoin::{Amount, OutPoint, Sequence, TxIn, TxOut};
 
     use super::*;
     use crate::Miniscript;
@@ -1695,5 +1695,44 @@ mod tests {
             Err(OutputUpdateError::MismatchedScriptPubkey),
             "output script_pubkey no longer matches"
         );
+    }
+
+    fn test_sign_input_with_descriptor(
+        desc: Descriptor<DefiniteDescriptorKey>,
+        xpriv: bip32::Xpriv,
+    ) -> Psbt {
+        let secp = Secp256k1::new();
+        let tx = bitcoin::Transaction {
+            version: transaction::Version::ONE,
+            lock_time: absolute::LockTime::from_height(1024).expect("locktime"),
+            input: vec![TxIn {
+                previous_output: OutPoint { ..OutPoint::default() },
+                sequence: Sequence::ENABLE_LOCKTIME_NO_RBF,
+                ..Default::default()
+            }],
+            output: vec![],
+        };
+        let mut psbt = Psbt::from_unsigned_tx(tx).unwrap();
+        psbt.inputs[0].witness_utxo =
+            Some(TxOut { value: Amount::from_sat(1_000), script_pubkey: desc.script_pubkey() });
+        psbt.inputs[0]
+            .update_with_descriptor_unchecked(&desc)
+            .unwrap();
+        psbt.sign(&xpriv, &secp).unwrap();
+        psbt.finalize_mut(&secp).unwrap();
+        psbt
+    }
+
+    #[test]
+    fn test_finalize_with_opdrop() {
+        let secp = Secp256k1::new();
+        let xpriv = bip32::Xpriv::new_master(bitcoin::Network::Testnet, &[42]).expect("master key");
+        let desc = format!(
+            "wsh(and_v(r:after(1024),pk({})))",
+            xpriv.to_keypair(&secp).public_key().to_string()
+        );
+        // let desc = format!("wsh(pk({}))", xpriv.to_keypair(&secp).public_key().to_string());
+        let desc = Descriptor::<DefiniteDescriptorKey>::from_str(&desc).unwrap();
+        test_sign_input_with_descriptor(desc, xpriv);
     }
 }

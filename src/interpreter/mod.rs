@@ -682,13 +682,17 @@ where
                 Terminal::DupIf(ref _sub) if node_state.n_evaluated == 1 => {
                     self.stack.push(stack::Element::Satisfied);
                 }
-                Terminal::ZeroNotEqual(ref sub) | Terminal::Verify(ref sub)
+                Terminal::ZeroNotEqual(ref sub)
+                | Terminal::Verify(ref sub)
+                | Terminal::Drop(ref sub)
                     if node_state.n_evaluated == 0 =>
                 {
                     self.push_evaluation_state(node_state.node, 1, 0);
                     self.push_evaluation_state(sub, 0, 0);
                 }
-                Terminal::Verify(ref _sub) if node_state.n_evaluated == 1 => {
+                Terminal::Verify(ref _sub) | Terminal::Drop(ref _sub)
+                    if node_state.n_evaluated == 1 =>
+                {
                     match self.stack.pop() {
                         Some(stack::Element::Satisfied) => (),
                         Some(_) => return Some(Err(Error::VerifyFailed)),

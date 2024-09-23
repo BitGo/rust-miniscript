@@ -33,6 +33,7 @@ impl<'a, Pk: MiniscriptKey, Ctx: ScriptContext> TreeLike for &'a Miniscript<Pk, 
             | Check(ref sub)
             | DupIf(ref sub)
             | Verify(ref sub)
+            | Drop(ref sub)
             | NonZero(ref sub)
             | ZeroNotEqual(ref sub) => Tree::Unary(sub),
             AndV(ref left, ref right)
@@ -63,6 +64,7 @@ impl<'a, Pk: MiniscriptKey, Ctx: ScriptContext> TreeLike for &'a Arc<Miniscript<
             | Check(ref sub)
             | DupIf(ref sub)
             | Verify(ref sub)
+            | Drop(ref sub)
             | NonZero(ref sub)
             | ZeroNotEqual(ref sub) => Tree::Unary(sub),
             AndV(ref left, ref right)
@@ -93,6 +95,7 @@ impl<'a, Pk: MiniscriptKey, Ctx: ScriptContext> TreeLike for &'a Terminal<Pk, Ct
             | Check(ref sub)
             | DupIf(ref sub)
             | Verify(ref sub)
+            | Drop(ref sub)
             | NonZero(ref sub)
             | ZeroNotEqual(ref sub) => Tree::Unary(sub.as_inner()),
             AndV(ref left, ref right)

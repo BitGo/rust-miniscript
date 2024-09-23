@@ -238,6 +238,19 @@ impl Correctness {
         })
     }
 
+    /// Constructor for the correctness properties of the `r:` fragment.
+    pub const fn cast_drop(self) -> Result<Self, ErrorKind> {
+        // from https://bitcoin.sipa.be/miniscript/:
+        // > Every miniscript expression has one of four basic types:
+        // > ...
+        // > "V" Verify expressions. Like "B", these take their inputs from the top of the stack.
+        // > Upon satisfaction however, they continue without pushing anything.
+        // > They cannot be dissatisfied (will abort instead).
+        // So while OP_DROP doesn't actually verify anything, the closest type is still `V`.
+        // We delegate to `cast_verify` to handle the rest of the properties.
+        Self::cast_verify(self)
+    }
+
     /// Constructor for the correctness properties of the `j:` fragment.
     pub const fn cast_nonzero(self) -> Result<Self, ErrorKind> {
         if !self.input.constfn_eq(Input::OneNonZero) && !self.input.constfn_eq(Input::AnyNonZero) {
