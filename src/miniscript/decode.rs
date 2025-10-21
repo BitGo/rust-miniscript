@@ -89,6 +89,7 @@ enum NonTerm {
     Check,
     DupIf,
     Verify,
+    Drop,
     NonZero,
     ZeroNotEqual,
     AndV,
@@ -156,6 +157,8 @@ pub enum Terminal<Pk: MiniscriptKey, Ctx: ScriptContext> {
     DupIf(Arc<Miniscript<Pk, Ctx>>),
     /// `[T] VERIFY`
     Verify(Arc<Miniscript<Pk, Ctx>>),
+    /// `[T] DROP`
+    Drop(Arc<Miniscript<Pk, Ctx>>),
     /// `SIZE 0NOTEQUAL IF [Fn] ENDIF`
     NonZero(Arc<Miniscript<Pk, Ctx>>),
     /// `[X] 0NOTEQUAL`
@@ -350,6 +353,10 @@ pub fn parse<Ctx: ScriptContext>(
                         non_term.push(NonTerm::ZeroNotEqual);
                         non_term.push(NonTerm::Expression);
                     },
+                    Tk::Drop => {
+                        non_term.push(NonTerm::Drop);
+                        non_term.push(NonTerm::Expression);
+                    },
                     // timelocks
                     Tk::CheckSequenceVerify, Tk::Num(n)
                         => term.reduce0(Terminal::Older(RelLockTime::from_consensus(n).map_err(Error::RelativeLockTime)?))?,
@@ -498,6 +505,7 @@ pub fn parse<Ctx: ScriptContext>(
             Some(NonTerm::Check) => term.reduce1(Terminal::Check)?,
             Some(NonTerm::DupIf) => term.reduce1(Terminal::DupIf)?,
             Some(NonTerm::Verify) => term.reduce1(Terminal::Verify)?,
+            Some(NonTerm::Drop) => term.reduce1(Terminal::Drop)?,
             Some(NonTerm::NonZero) => term.reduce1(Terminal::NonZero)?,
             Some(NonTerm::ZeroNotEqual) => term.reduce1(Terminal::ZeroNotEqual)?,
             Some(NonTerm::AndV) => {

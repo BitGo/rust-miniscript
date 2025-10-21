@@ -135,6 +135,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Liftable<Pk> for Terminal<Pk, Ctx> {
             | Terminal::Check(ref sub)
             | Terminal::DupIf(ref sub)
             | Terminal::Verify(ref sub)
+            | Terminal::Drop(ref sub)
             | Terminal::NonZero(ref sub)
             | Terminal::ZeroNotEqual(ref sub) => sub.node.lift()?,
             Terminal::AndV(ref left, ref right) | Terminal::AndB(ref left, ref right) => {

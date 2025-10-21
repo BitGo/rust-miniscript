@@ -28,6 +28,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> TreeLike for &'_ Miniscript<Pk, Ctx>
             | Check(ref sub)
             | DupIf(ref sub)
             | Verify(ref sub)
+            | Drop(ref sub)
             | NonZero(ref sub)
             | ZeroNotEqual(ref sub) => Tree::Unary(sub),
             AndV(ref left, ref right)
@@ -53,6 +54,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> TreeLike for Arc<Miniscript<Pk, Ctx>
             | Check(ref sub)
             | DupIf(ref sub)
             | Verify(ref sub)
+            | Drop(ref sub)
             | NonZero(ref sub)
             | ZeroNotEqual(ref sub) => Tree::Unary(Arc::clone(sub)),
             AndV(ref left, ref right)

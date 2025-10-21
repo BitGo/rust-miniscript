@@ -36,6 +36,8 @@ pub struct ExtParams {
     /// Allow parsing of miniscripts with raw pkh fragments without the pk.
     /// This could be obtained when parsing miniscript from script
     pub raw_pkh: bool,
+    /// Allow parsing of miniscripts with drop fragments (`r`)
+    pub drop: bool,
 }
 
 impl ExtParams {
@@ -48,6 +50,7 @@ impl ExtParams {
             malleability: false,
             repeated_pk: false,
             raw_pkh: false,
+            drop: false,
         }
     }
 
@@ -65,6 +68,7 @@ impl ExtParams {
             malleability: true,
             repeated_pk: true,
             raw_pkh: false,
+            drop: true,
         }
     }
 
@@ -77,6 +81,7 @@ impl ExtParams {
             malleability: true,
             repeated_pk: true,
             raw_pkh: true,
+            drop: true,
         }
     }
 
@@ -115,6 +120,12 @@ impl ExtParams {
         self.raw_pkh = true;
         self
     }
+
+    /// Builder that allows miniscripts with drop fragments.
+    pub fn drop(mut self) -> ExtParams {
+        self.drop = true;
+        self
+    }
 }
 
 /// Possible reasons Miniscript guarantees can fail
@@ -137,6 +148,8 @@ pub enum AnalysisError {
     Malleable,
     /// Contains partial descriptor raw pkh
     ContainsRawPkh,
+    /// Contains a drop fragment
+    ContainsDrop,
 }
 
 impl fmt::Display for AnalysisError {
@@ -156,6 +169,7 @@ impl fmt::Display for AnalysisError {
             }
             AnalysisError::Malleable => f.write_str("Miniscript is malleable"),
             AnalysisError::ContainsRawPkh => f.write_str("Miniscript contains raw pkh"),
+            AnalysisError::ContainsDrop => f.write_str("Miniscript contains drop fragment"),
         }
     }
 }
@@ -171,7 +185,8 @@ impl error::Error for AnalysisError {
             | BranchExceedResouceLimits
             | HeightTimelockCombination
             | Malleable
-            | ContainsRawPkh => None,
+            | ContainsRawPkh
+            | ContainsDrop => None,
         }
     }
 }
@@ -205,6 +220,11 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Miniscript<Pk, Ctx> {
     /// Whether the given miniscript contains a raw pkh fragment
     pub fn contains_raw_pkh(&self) -> bool {
         self.iter().any(|ms| matches!(ms.node, Terminal::RawPkH(_)))
+    }
+
+    /// Whether the given miniscript contains a drop fragment
+    pub fn contains_drop(&self) -> bool {
+        self.iter().any(|ms| matches!(ms.node, Terminal::Drop(_)))
     }
 
     /// Check whether the underlying Miniscript is safe under the current context
@@ -246,6 +266,8 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Miniscript<Pk, Ctx> {
             Err(AnalysisError::HeightTimelockCombination)
         } else if !ext.raw_pkh && self.contains_raw_pkh() {
             Err(AnalysisError::ContainsRawPkh)
+        } else if !ext.drop && self.contains_drop() {
+            Err(AnalysisError::ContainsDrop)
         } else {
             Ok(())
         }

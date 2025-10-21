@@ -666,6 +666,14 @@ where
                     debug_assert_eq!(node_state.n_satisfied, 0);
                     self.push_evaluation_state(sub, 0, 0);
                 }
+                Terminal::Drop(ref sub) if node_state.n_evaluated == 0 => {
+                    self.push_evaluation_state(node_state.node, 1, 0);
+                    self.push_evaluation_state(sub, 0, 0);
+                }
+                Terminal::Drop(ref _sub) if node_state.n_evaluated == 1 => {
+                    // OP_DROP pops the top element from the stack
+                    self.stack.pop();
+                }
                 Terminal::DupIf(ref sub) if node_state.n_evaluated == 0 => match self.stack.pop() {
                     Some(stack::Element::Dissatisfied) => {
                         self.stack.push(stack::Element::Dissatisfied);

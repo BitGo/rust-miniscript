@@ -34,6 +34,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Terminal<Pk, Ctx> {
             Terminal::Check(ref sub) => Some(('c', sub)),
             Terminal::DupIf(ref sub) => Some(('d', sub)),
             Terminal::Verify(ref sub) => Some(('v', sub)),
+            Terminal::Drop(ref sub) => Some(('r', sub)),
             Terminal::NonZero(ref sub) => Some(('j', sub)),
             Terminal::ZeroNotEqual(ref sub) => Some(('n', sub)),
             Terminal::AndV(ref sub, ref r) if r.node == Terminal::True => Some(('t', sub)),
@@ -410,6 +411,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Terminal<Pk, Ctx> {
                 .push_astelem(sub)
                 .push_opcode(opcodes::all::OP_ENDIF),
             Terminal::Verify(ref sub) => builder.push_astelem(sub).push_verify(),
+            Terminal::Drop(ref sub) => builder.push_astelem(sub).push_opcode(opcodes::all::OP_DROP),
             Terminal::NonZero(ref sub) => builder
                 .push_opcode(opcodes::all::OP_SIZE)
                 .push_opcode(opcodes::all::OP_0NOTEQUAL)
