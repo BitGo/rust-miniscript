@@ -113,7 +113,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Liftable<Pk> for Miniscript<Pk, Ctx>
         // a combination of heightlock and timelock
         self.lift_check()?;
 
-        let mut stack = vec![];
+let mut stack = vec![];
         for item in self.rtl_post_order_iter() {
             let new_term = match item.node.node {
                 Terminal::PkK(ref pk) | Terminal::PkH(ref pk) => {
@@ -135,6 +135,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Liftable<Pk> for Miniscript<Pk, Ctx>
                 | Terminal::Check(..)
                 | Terminal::DupIf(..)
                 | Terminal::Verify(..)
+                | Terminal::Drop(..)
                 | Terminal::NonZero(..)
                 | Terminal::ZeroNotEqual(..) => stack.pop().unwrap(),
                 Terminal::AndV(..) | Terminal::AndB(..) => Arc::new(Semantic::Thresh(

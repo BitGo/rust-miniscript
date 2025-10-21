@@ -472,4 +472,134 @@ mod tests {
         let expected = Psbt::deserialize(&hex::decode_to_vec("70736274ff01009a020000000258e87a21b56daf0c23be8e7070456c336f7cbaa5c8757924f545887bb2abdd750000000000ffffffff838d0427d0ec650a68aa46bb0b098aea4422c071b2ca78352a077959d07cea1d0100000000ffffffff0270aaf00800000000160014d85c2b71d0060b09c9886aeb815e50991dda124d00e1f5050000000016001400aea9a2e5f0f876a588df5546e8742d1d87008f00000000000100bb0200000001aad73931018bd25f84ae400b68848be09db706eac2ac18298babee71ab656f8b0000000048473044022058f6fc7c6a33e1b31548d481c826c015bd30135aad42cd67790dab66d2ad243b02204a1ced2604c6735b6393e5b41691dd78b00f0c5942fb9f751856faa938157dba01feffffff0280f0fa020000000017a9140fb9463421696b82c833af241c78c17ddbde493487d0f20a270100000017a91429ca74f8a08f81999428185c97b5d852e4063f6187650000000107da00473044022074018ad4180097b873323c0015720b3684cc8123891048e7dbcd9b55ad679c99022073d369b740e3eb53dcefa33823c8070514ca55a7dd9544f157c167913261118c01483045022100f61038b308dc1da865a34852746f015772934208c6d24454393cd99bdf2217770220056e675a675a6d0a02b85b14e5e29074d8a25a9b5760bea2816f661910a006ea01475221029583bf39ae0a609747ad199addd634fa6108559d6c5cd39b4c2183f1ab96e07f2102dab61ff49a14db6a7d02b0cd1fbb78fc4b18312b5b4e54dae4dba2fbfef536d752ae0001012000c2eb0b0000000017a914b7f5faf40e3d40a5a459b1db3535f2b72fa921e8870107232200208c2353173743b595dfb4a07b72ba8e42e3797da74e87fe7d9d7497e3b20289030108da0400473044022062eb7a556107a7c73f45ac4ab5a1dddf6f7075fb1275969a7f383efff784bcb202200c05dbb7470dbf2f08557dd356c7325c1ed30913e996cd3840945db12228da5f01473044022065f45ba5998b59a27ffe1a7bed016af1f1f90d54b3aa8f7450aa5f56a25103bd02207f724703ad1edb96680b284b56d4ffcb88f7fb759eabbe08aa30f29b851383d20147522103089dc10c7ac6db54f91329af617333db388cead0c231f723379d1b99030b02dc21023add904f3d6dcf59ddb906b0dee23529b7ffb9ed50e5e86151926860221f0e7352ae00220203a9a4c37f5996d3aa25dbac6b570af0650394492942460b354753ed9eeca5877110d90c6a4f000000800000008004000080002202027f6399757d2eff55a136ad02c684b1838b6556e5f1b6b34282a94b6b5005109610d90c6a4f00000080000000800500008000").unwrap()).unwrap();
         assert_eq!(psbt, expected);
     }
+
+    // Helper function to generate deterministic test keys
+    // Based on the pattern from src/test_utils.rs::random_sks()
+    fn generate_test_keys(n: usize) -> Vec<bitcoin::secp256k1::SecretKey> {
+        let mut sk = [0; 32];
+        let mut sks = vec![];
+        for i in 1..n + 1 {
+            sk[0] = i as u8;
+            sk[1] = (i >> 8) as u8;
+            sk[2] = (i >> 16) as u8;
+            sk[3] = (i >> 24) as u8;
+
+            let sk = bitcoin::secp256k1::SecretKey::from_slice(&sk[..]).expect("secret key");
+            sks.push(sk)
+        }
+        sks
+    }
+
+    #[test]
+    fn test_opdrop_psbt_signing() {
+        use std::str::FromStr;
+
+        use bitcoin::sighash::{EcdsaSighashType, SighashCache};
+        use bitcoin::{absolute, Amount, OutPoint, TxIn, TxOut};
+
+        use crate::psbt::PsbtExt;
+        use crate::{Descriptor, DescriptorPublicKey};
+
+        let secp = Secp256k1::new();
+
+        // Generate 3 test keys for a 2-of-3 multisig
+        let sks = generate_test_keys(3);
+        let (sk1, sk2, _sk3) = (sks[0], sks[1], sks[2]);
+
+        let pk1 =
+            bitcoin::PublicKey::new(bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &sk1));
+        let pk2 =
+            bitcoin::PublicKey::new(bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &sk2));
+        let pk3 =
+            bitcoin::PublicKey::new(bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &sks[2]));
+
+        // Create descriptor with OP_DROP: wsh(and_v(r:after(1024),multi(2,pk1,pk2,pk3)))
+        let locktime = 1024u32;
+        let desc_str =
+            format!("wsh(and_v(r:after({}),multi(2,{},{},{})))", locktime, pk1, pk2, pk3);
+
+        // Parse as DescriptorPublicKey first, then get the concrete descriptor
+        let desc_dpk = Descriptor::<DescriptorPublicKey>::from_str(&desc_str).unwrap();
+        let desc = desc_dpk.at_derivation_index(0).unwrap();
+
+        // Create a PSBT with the specified locktime
+        let script_pubkey = desc.script_pubkey();
+        let value = Amount::from_sat(100_000_000); // 1 BTC
+
+        // Create previous transaction
+        let prev_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![],
+            output: vec![TxOut { value, script_pubkey: script_pubkey.clone() }],
+        };
+
+        // Create spending transaction with proper locktime
+        let spending_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: absolute::LockTime::from_height(locktime).unwrap(),
+            input: vec![TxIn {
+                previous_output: OutPoint { txid: prev_tx.compute_txid(), vout: 0 },
+                sequence: bitcoin::Sequence(0xfffffffe), // Enable locktime
+                script_sig: ScriptBuf::new(),
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![TxOut { value, script_pubkey: script_pubkey.clone() }],
+        };
+
+        let mut psbt = Psbt::from_unsigned_tx(spending_tx).unwrap();
+
+        // Set the witness_utxo first (required for update_input_with_descriptor)
+        psbt.inputs[0].witness_utxo = Some(prev_tx.output[0].clone());
+
+        // Use update_input_with_descriptor to populate witness_script and other metadata
+        psbt.update_input_with_descriptor(0, &desc).unwrap();
+
+        // Sign with 2 of the 3 keys (satisfying the 2-of-3 multisig requirement)
+        let signers = vec![(sk1, pk1), (sk2, pk2)];
+
+        // Get the sighash message using the PsbtExt trait method
+        let mut sighash_cache = SighashCache::new(&psbt.unsigned_tx);
+        let msg = psbt
+            .sighash_msg(0, &mut sighash_cache, None)
+            .unwrap()
+            .to_secp_msg();
+
+        // Sign with each key
+        let hash_ty = EcdsaSighashType::All;
+        for (secret_key, public_key) in signers {
+            let signature = secp.sign_ecdsa(&msg, &secret_key);
+            psbt.inputs[0]
+                .partial_sigs
+                .insert(public_key, bitcoin::ecdsa::Signature { signature, sighash_type: hash_ty });
+        }
+
+        // Verify the PSBT was successfully signed
+        assert_eq!(psbt.inputs[0].partial_sigs.len(), 2, "PSBT should have 2 partial signatures");
+
+        // Verify the PSBT has the required metadata (populated by update_input_with_descriptor)
+        assert!(psbt.inputs[0].witness_utxo.is_some(), "PSBT should have witness_utxo");
+        assert!(psbt.inputs[0].witness_script.is_some(), "PSBT should have witness_script");
+
+        // Verify the transaction has proper locktime and sequence
+        assert_eq!(
+            psbt.unsigned_tx.lock_time,
+            absolute::LockTime::from_height(locktime).unwrap(),
+            "Transaction locktime should match descriptor requirement"
+        );
+        assert_eq!(
+            psbt.unsigned_tx.input[0].sequence,
+            bitcoin::Sequence(0xfffffffe),
+            "Sequence should enable locktime"
+        );
+
+        // Finalize the PSBT (use finalize_mall_mut to allow malleable satisfactions)
+        psbt.finalize_mall_mut(&secp).unwrap();
+
+        // Extract the final transaction
+        let tx = psbt.extract(&secp).unwrap();
+
+        // Verify the transaction has a witness
+        assert!(!tx.input[0].witness.is_empty(), "Transaction should have a witness");
+    }
 }

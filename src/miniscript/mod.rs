@@ -104,6 +104,7 @@ mod private {
                     Terminal::Check(..) => Terminal::Check(stack.pop().unwrap()),
                     Terminal::DupIf(..) => Terminal::DupIf(stack.pop().unwrap()),
                     Terminal::Verify(..) => Terminal::Verify(stack.pop().unwrap()),
+                    Terminal::Drop(..) => Terminal::Drop(stack.pop().unwrap()),
                     Terminal::NonZero(..) => Terminal::NonZero(stack.pop().unwrap()),
                     Terminal::ZeroNotEqual(..) => Terminal::ZeroNotEqual(stack.pop().unwrap()),
                     Terminal::AndV(..) => {
@@ -371,6 +372,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Miniscript<Pk, Ctx> {
                 Terminal::After(n) => script_num_size(n.to_consensus_u32() as usize) + 1,
                 Terminal::Older(n) => script_num_size(n.to_consensus_u32() as usize) + 1,
                 Terminal::Verify(ref sub) => usize::from(!sub.ext.has_free_verify),
+                Terminal::Drop(..) => 1,
                 Terminal::Thresh(ref thresh) => {
                     script_num_size(thresh.k()) // k
                         + 1 // EQUAL
@@ -697,6 +699,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Miniscript<Pk, Ctx> {
                 Terminal::Check(..) => Terminal::Check(translated.pop().unwrap()),
                 Terminal::DupIf(..) => Terminal::DupIf(translated.pop().unwrap()),
                 Terminal::Verify(..) => Terminal::Verify(translated.pop().unwrap()),
+                Terminal::Drop(..) => Terminal::Drop(translated.pop().unwrap()),
                 Terminal::NonZero(..) => Terminal::NonZero(translated.pop().unwrap()),
                 Terminal::ZeroNotEqual(..) => Terminal::ZeroNotEqual(translated.pop().unwrap()),
                 Terminal::AndV(..) => {
@@ -762,6 +765,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Miniscript<Pk, Ctx> {
                 Terminal::Check(..) => Terminal::Check(stack.pop().unwrap()),
                 Terminal::DupIf(..) => Terminal::DupIf(stack.pop().unwrap()),
                 Terminal::Verify(..) => Terminal::Verify(stack.pop().unwrap()),
+                Terminal::Drop(..) => Terminal::Drop(stack.pop().unwrap()),
                 Terminal::NonZero(..) => Terminal::NonZero(stack.pop().unwrap()),
                 Terminal::ZeroNotEqual(..) => Terminal::ZeroNotEqual(stack.pop().unwrap()),
                 Terminal::AndV(..) => Terminal::AndV(stack.pop().unwrap(), stack.pop().unwrap()),
@@ -998,6 +1002,7 @@ impl<Pk: FromStrKey, Ctx: ScriptContext> FromTree for Miniscript<Pk, Ctx> {
                         b'c' => Terminal::Check(new),
                         b'd' => Terminal::DupIf(new),
                         b'v' => Terminal::Verify(new),
+                        b'r' => Terminal::Drop(new),
                         b'j' => Terminal::NonZero(new),
                         b'n' => Terminal::ZeroNotEqual(new),
                         b't' => Terminal::AndV(new, Arc::new(Miniscript::TRUE)),
@@ -1439,6 +1444,15 @@ mod tests {
         assert_eq!(abs.minimum_n_keys(), Some(3));
 
         roundtrip(&ms_str!("older(921)"), "OP_PUSHBYTES_2 9903 OP_CSV");
+        roundtrip(
+            &ms_str!("and_v(r:after(1024),1)"),
+            "OP_PUSHBYTES_2 0004 OP_CLTV OP_DROP OP_PUSHNUM_1",
+        );
+        roundtrip(
+            &ms_str!("and_v(r:older(1024),1)"),
+            "OP_PUSHBYTES_2 0004 OP_CSV OP_DROP OP_PUSHNUM_1",
+        );
+        roundtrip(&ms_str!("and_v(r:1,1)"), "OP_PUSHNUM_1 OP_DROP OP_PUSHNUM_1");
 
         roundtrip(
             &ms_str!("sha256({})",sha256::Hash::hash(&[])),
@@ -1696,6 +1710,62 @@ mod tests {
         type TapMs = Miniscript<String, Tap>;
         let ms_str = TapMs::from_str_insane("j:multi_a(1,A,B,C)");
         assert!(ms_str.is_err());
+    }
+
+    #[test]
+    fn drop_verify_witness_equivalence() {
+        // Test that r: and v: wrappers have identical witness costs
+        // This validates that cast_drop correctly uses self.sat_cost
+        type SwMs = Miniscript<String, Segwitv0>;
+
+        // Test various base fragments wrapped with both r: and v:
+        let test_cases = vec![
+            ("after(1024)", "timelock"),
+            ("older(1024)", "timelock"),
+            ("pk(A)", "pubkey"),
+        ];
+
+        for (base, description) in test_cases {
+            let with_drop = SwMs::from_str_insane(&format!("and_v(r:{},1)", base))
+                .expect(&format!("Failed to parse r:{} ({})", base, description));
+            let with_verify = SwMs::from_str_insane(&format!("and_v(v:{},1)", base))
+                .expect(&format!("Failed to parse v:{} ({})", base, description));
+
+            // Both should have identical satisfaction sizes since they need the same witness
+            assert_eq!(
+                with_drop.ext.sat_data, with_verify.ext.sat_data,
+                "r:{} and v:{} should have identical satisfaction sizes ({})",
+                base, base, description
+            );
+
+            // Both should have no dissatisfaction
+            assert_eq!(
+                with_drop.ext.dissat_data, None,
+                "r:{} should have no dissatisfaction ({})",
+                base, description
+            );
+            assert_eq!(
+                with_verify.ext.dissat_data, None,
+                "v:{} should have no dissatisfaction ({})",
+                base, description
+            );
+
+            // Both should produce B-type (since and_v(V,1) -> B)
+            assert_eq!(
+                with_drop.ty.corr.base,
+                types::Base::B,
+                "r:{} should be B-type ({})",
+                base,
+                description
+            );
+            assert_eq!(
+                with_verify.ty.corr.base,
+                types::Base::B,
+                "v:{} should be B-type ({})",
+                base,
+                description
+            );
+        }
     }
 
     #[test]

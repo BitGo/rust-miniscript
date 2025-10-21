@@ -62,6 +62,7 @@ enum NonTerm {
     Check,
     DupIf,
     Verify,
+    Drop,
     NonZero,
     ZeroNotEqual,
     AndV,
@@ -128,6 +129,8 @@ pub enum Terminal<Pk: MiniscriptKey, Ctx: ScriptContext> {
     DupIf(Arc<Miniscript<Pk, Ctx>>),
     /// `[T] VERIFY`
     Verify(Arc<Miniscript<Pk, Ctx>>),
+    /// `[T] DROP`
+    Drop(Arc<Miniscript<Pk, Ctx>>),
     /// `SIZE 0NOTEQUAL IF [Fn] ENDIF`
     NonZero(Arc<Miniscript<Pk, Ctx>>),
     /// `[X] 0NOTEQUAL`
@@ -179,6 +182,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Clone for Terminal<Pk, Ctx> {
             Terminal::Check(ref sub) => Terminal::Check(Arc::new(Miniscript::clone(sub))),
             Terminal::DupIf(ref sub) => Terminal::DupIf(Arc::new(Miniscript::clone(sub))),
             Terminal::Verify(ref sub) => Terminal::Verify(Arc::new(Miniscript::clone(sub))),
+            Terminal::Drop(ref sub) => Terminal::Drop(Arc::new(Miniscript::clone(sub))),
             Terminal::NonZero(ref sub) => Terminal::NonZero(Arc::new(Miniscript::clone(sub))),
             Terminal::ZeroNotEqual(ref sub) => {
                 Terminal::ZeroNotEqual(Arc::new(Miniscript::clone(sub)))
@@ -439,6 +443,10 @@ pub fn decode<Ctx: ScriptContext>(
                         non_term.push(NonTerm::ZeroNotEqual);
                         non_term.push(NonTerm::Expression);
                     },
+                    Tk::Drop => {
+                        non_term.push(NonTerm::Drop);
+                        non_term.push(NonTerm::Expression);
+                    },
                     // timelocks
                     Tk::CheckSequenceVerify, Tk::Num(n)
                         => term.push(Miniscript::older(RelLockTime::from_consensus(n).map_err(Error::RelativeLockTime)?)),
@@ -583,6 +591,7 @@ pub fn decode<Ctx: ScriptContext>(
             Some(NonTerm::Check) => term.reduce1(Terminal::Check)?,
             Some(NonTerm::DupIf) => term.reduce1(Terminal::DupIf)?,
             Some(NonTerm::Verify) => term.reduce1(Terminal::Verify)?,
+            Some(NonTerm::Drop) => term.reduce1(Terminal::Drop)?,
             Some(NonTerm::NonZero) => term.reduce1(Terminal::NonZero)?,
             Some(NonTerm::ZeroNotEqual) => term.reduce1(Terminal::ZeroNotEqual)?,
             Some(NonTerm::AndV) => {
