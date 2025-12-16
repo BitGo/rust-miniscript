@@ -324,6 +324,19 @@ fn interpreter_inp_check<C: secp256k1::Verification, T: Borrow<TxOut>>(
     witness: &Witness,
     script_sig: &Script,
 ) -> Result<(), Error> {
+    interpreter_inp_check_with_fork_id(psbt, secp, index, utxos, witness, script_sig, None)
+}
+
+// Run the miniscript interpreter on a single psbt input with optional FORKID support
+fn interpreter_inp_check_with_fork_id<C: secp256k1::Verification, T: Borrow<TxOut>>(
+    psbt: &Psbt,
+    secp: &Secp256k1<C>,
+    index: usize,
+    utxos: &Prevouts<T>,
+    witness: &Witness,
+    script_sig: &Script,
+    fork_id: Option<u32>,
+) -> Result<(), Error> {
     let spk = get_scriptpubkey(psbt, index).map_err(|e| Error::InputError(e, index))?;
 
     // Now look at all the satisfied constraints. If everything is filled in
@@ -335,7 +348,7 @@ fn interpreter_inp_check<C: secp256k1::Verification, T: Borrow<TxOut>>(
         let interpreter =
             interpreter::Interpreter::from_txdata(&spk, script_sig, witness, csv, cltv)
                 .map_err(|e| Error::InputError(InputError::Interpreter(e), index))?;
-        let iter = interpreter.iter(secp, &psbt.unsigned_tx, index, utxos);
+        let iter = interpreter.iter_with_fork_id(secp, &psbt.unsigned_tx, index, utxos, fork_id);
         if let Some(error) = iter.filter_map(Result::err).next() {
             return Err(Error::InputError(InputError::Interpreter(error), index));
         };
@@ -393,6 +406,17 @@ fn finalize_input_helper<C: secp256k1::Verification>(
     secp: &Secp256k1<C>,
     allow_mall: bool,
 ) -> Result<(Witness, ScriptBuf), super::Error> {
+    finalize_input_helper_with_fork_id(psbt, index, secp, allow_mall, None)
+}
+
+// Helper function with optional FORKID support for BCH/BTG/XEC networks.
+fn finalize_input_helper_with_fork_id<C: secp256k1::Verification>(
+    psbt: &Psbt,
+    index: usize,
+    secp: &Secp256k1<C>,
+    allow_mall: bool,
+    fork_id: Option<u32>,
+) -> Result<(Witness, ScriptBuf), super::Error> {
     let (witness, script_sig) = {
         let spk = get_scriptpubkey(psbt, index).map_err(|e| Error::InputError(e, index))?;
         let sat = PsbtInputSatisfier::new(psbt, index);
@@ -420,7 +444,7 @@ fn finalize_input_helper<C: secp256k1::Verification>(
     let witness = bitcoin::Witness::from_slice(&witness);
     let utxos = prevouts(psbt)?;
     let utxos = &Prevouts::All(&utxos);
-    interpreter_inp_check(psbt, secp, index, utxos, &witness, &script_sig)?;
+    interpreter_inp_check_with_fork_id(psbt, secp, index, utxos, &witness, &script_sig, fork_id)?;
 
     Ok((witness, script_sig))
 }
@@ -431,7 +455,17 @@ pub(super) fn finalize_input<C: secp256k1::Verification>(
     secp: &Secp256k1<C>,
     allow_mall: bool,
 ) -> Result<(), super::Error> {
-    let (witness, script_sig) = finalize_input_helper(psbt, index, secp, allow_mall)?;
+    finalize_input_with_fork_id(psbt, index, secp, allow_mall, None)
+}
+
+pub(super) fn finalize_input_with_fork_id<C: secp256k1::Verification>(
+    psbt: &mut Psbt,
+    index: usize,
+    secp: &Secp256k1<C>,
+    allow_mall: bool,
+    fork_id: Option<u32>,
+) -> Result<(), super::Error> {
+    let (witness, script_sig) = finalize_input_helper_with_fork_id(psbt, index, secp, allow_mall, fork_id)?;
 
     // Now mutate the psbt input. Note that we cannot error after this point.
     // If the input is mutated, it means that the finalization succeeded.

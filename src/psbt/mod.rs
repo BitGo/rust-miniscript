@@ -390,22 +390,29 @@ fn sanity_check(psbt: &Psbt) -> Result<(), Error> {
     // Check well-formedness of input data
     for (index, input) in psbt.inputs.iter().enumerate() {
         // TODO: fix this after https://github.com/rust-bitcoin/rust-bitcoin/issues/838
+        // Support FORKID sighash types (used by BCH, BTG, XEC, etc.)
+        // by stripping the FORKID flag (0x40) before validation
         let target_ecdsa_sighash_ty = match input.sighash_type {
-            Some(psbt_hash_ty) => psbt_hash_ty
-                .ecdsa_hash_ty()
-                .map_err(|e| Error::InputError(InputError::NonStandardSighashType(e), index))?,
+            Some(psbt_hash_ty) => {
+                let sighash_u32 = psbt_hash_ty.to_u32();
+                // Strip FORKID (0x40) and ANYONECANPAY (0x80) to get base type
+                let base_type = sighash_u32 & 0x1f;
+                sighash::EcdsaSighashType::from_standard(base_type)
+                    .map_err(|e| Error::InputError(InputError::NonStandardSighashType(e), index))?
+            }
             None => sighash::EcdsaSighashType::All,
         };
         for (key, ecdsa_sig) in &input.partial_sigs {
-            let flag = sighash::EcdsaSighashType::from_standard(ecdsa_sig.sighash_type as u32)
-                .map_err(|_| {
-                    Error::InputError(
-                        InputError::Interpreter(interpreter::Error::NonStandardSighash(
-                            ecdsa_sig.to_vec(),
-                        )),
-                        index,
-                    )
-                })?;
+            // Strip FORKID flag (0x40) to get base sighash type for validation
+            let base_sighash = (ecdsa_sig.sighash_type as u32) & 0x1f;
+            let flag = sighash::EcdsaSighashType::from_standard(base_sighash).map_err(|_| {
+                Error::InputError(
+                    InputError::Interpreter(interpreter::Error::NonStandardSighash(
+                        ecdsa_sig.to_vec(),
+                    )),
+                    index,
+                )
+            })?;
             if target_ecdsa_sighash_ty != flag {
                 return Err(Error::InputError(
                     InputError::WrongSighashFlag {
@@ -512,6 +519,29 @@ pub trait PsbtExt {
         secp: &secp256k1::Secp256k1<C>,
         index: usize,
     ) -> Result<Psbt, (Psbt, Error)>;
+
+    /// Same as [`PsbtExt::finalize_mut`], but with FORKID support for BCH/BTG/XEC networks.
+    /// If `fork_id` is Some, uses BCH-style BIP143 sighash when FORKID flag is detected.
+    fn finalize_mut_with_fork_id<C: secp256k1::Verification>(
+        &mut self,
+        secp: &secp256k1::Secp256k1<C>,
+        fork_id: Option<u32>,
+    ) -> Result<(), Vec<Error>>;
+
+    /// Same as [`PsbtExt::finalize`], but with FORKID support for BCH/BTG/XEC networks.
+    fn finalize_with_fork_id<C: secp256k1::Verification>(
+        self,
+        secp: &secp256k1::Secp256k1<C>,
+        fork_id: Option<u32>,
+    ) -> Result<Psbt, (Psbt, Vec<Error>)>;
+
+    /// Same as [`PsbtExt::finalize_inp_mut`], but with FORKID support for BCH/BTG/XEC networks.
+    fn finalize_inp_mut_with_fork_id<C: secp256k1::Verification>(
+        &mut self,
+        secp: &secp256k1::Secp256k1<C>,
+        index: usize,
+        fork_id: Option<u32>,
+    ) -> Result<(), Error>;
 
     /// Psbt extractor as defined in BIP174 that takes in a psbt reference
     /// and outputs a extracted [`bitcoin::Transaction`].
@@ -697,6 +727,54 @@ impl PsbtExt for Psbt {
             Ok(..) => Ok(self),
             Err(e) => Err((self, e)),
         }
+    }
+
+    fn finalize_mut_with_fork_id<C: secp256k1::Verification>(
+        &mut self,
+        secp: &secp256k1::Secp256k1<C>,
+        fork_id: Option<u32>,
+    ) -> Result<(), Vec<Error>> {
+        let mut errors = vec![];
+        for index in 0..self.inputs.len() {
+            match finalizer::finalize_input_with_fork_id(
+                self, index, secp, /*allow_mall*/ false, fork_id,
+            ) {
+                Ok(..) => {}
+                Err(e) => {
+                    errors.push(e);
+                }
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    fn finalize_with_fork_id<C: secp256k1::Verification>(
+        mut self,
+        secp: &secp256k1::Secp256k1<C>,
+        fork_id: Option<u32>,
+    ) -> Result<Psbt, (Psbt, Vec<Error>)> {
+        match self.finalize_mut_with_fork_id(secp, fork_id) {
+            Ok(..) => Ok(self),
+            Err(e) => Err((self, e)),
+        }
+    }
+
+    fn finalize_inp_mut_with_fork_id<C: secp256k1::Verification>(
+        &mut self,
+        secp: &secp256k1::Secp256k1<C>,
+        index: usize,
+        fork_id: Option<u32>,
+    ) -> Result<(), Error> {
+        if index >= self.inputs.len() {
+            return Err(Error::InputIdxOutofBounds { psbt_inp: self.inputs.len(), index });
+        }
+        finalizer::finalize_input_with_fork_id(
+            self, index, secp, /*allow_mall*/ false, fork_id,
+        )
     }
 
     fn extract<C: secp256k1::Verification>(

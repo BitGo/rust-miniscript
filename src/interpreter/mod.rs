@@ -198,6 +198,21 @@ impl<'txin> Interpreter<'txin> {
         prevouts: &sighash::Prevouts<T>,
         sig: &KeySigPair,
     ) -> bool {
+        self.verify_sig_with_fork_id(secp, tx, input_idx, prevouts, sig, None)
+    }
+
+    /// Verify a signature with optional FORKID support for BCH/BTG/XEC networks.
+    /// If `fork_id` is Some, uses BCH-style BIP143 sighash when FORKID flag (0x40) is detected.
+    #[allow(deprecated)] // For segwit_signature_hash
+    pub fn verify_sig_with_fork_id<C: secp256k1::Verification, T: Borrow<TxOut>>(
+        &self,
+        secp: &secp256k1::Secp256k1<C>,
+        tx: &bitcoin::Transaction,
+        input_idx: usize,
+        prevouts: &sighash::Prevouts<T>,
+        sig: &KeySigPair,
+        fork_id: Option<u32>,
+    ) -> bool {
         fn get_prevout<'u, T: Borrow<TxOut>>(
             prevouts: &'u sighash::Prevouts<'u, T>,
             input_index: usize,
@@ -217,7 +232,24 @@ impl<'txin> Interpreter<'txin> {
         match sig {
             KeySigPair::Ecdsa(key, ecdsa_sig) => {
                 let script_pubkey = self.script_code.as_ref().expect("Legacy have script code");
-                let msg = if self.is_legacy() {
+                // Check if FORKID flag (0x40) is set in sighash type
+                let has_forkid = (ecdsa_sig.sighash_type & 0x40) != 0;
+                let msg = if has_forkid && fork_id.is_some() {
+                    // BCH-style BIP143 sighash with FORKID
+                    let amt = match get_prevout(prevouts, input_idx) {
+                        Some(txout) => txout.borrow().value,
+                        None => return false,
+                    };
+                    // Pass the full sighash type (including FORKID flag) to p2wsh_signature_hash_forkid
+                    let sighash = cache.p2wsh_signature_hash_forkid(
+                        input_idx,
+                        script_pubkey,
+                        amt,
+                        ecdsa_sig.sighash_type,
+                        Some(fork_id.unwrap()),
+                    );
+                    sighash.map(|hash| secp256k1::Message::from_digest(hash.to_byte_array()))
+                } else if self.is_legacy() {
                     let sighash = cache.legacy_signature_hash(
                         input_idx,
                         script_pubkey,
@@ -308,6 +340,21 @@ impl<'txin> Interpreter<'txin> {
         prevouts: &'iter sighash::Prevouts<T>, // actually a 'prevouts, but 'prevouts: 'iter
     ) -> Iter<'txin, 'iter> {
         self.iter_custom(Box::new(move |sig| self.verify_sig(secp, tx, input_idx, prevouts, sig)))
+    }
+
+    /// Creates an iterator over the satisfied spending conditions with FORKID support
+    /// for BCH/BTG/XEC networks.
+    pub fn iter_with_fork_id<'iter, C: secp256k1::Verification, T: Borrow<TxOut>>(
+        &'iter self,
+        secp: &'iter secp256k1::Secp256k1<C>,
+        tx: &'txin bitcoin::Transaction,
+        input_idx: usize,
+        prevouts: &'iter sighash::Prevouts<T>,
+        fork_id: Option<u32>,
+    ) -> Iter<'txin, 'iter> {
+        self.iter_custom(Box::new(move |sig| {
+            self.verify_sig_with_fork_id(secp, tx, input_idx, prevouts, sig, fork_id)
+        }))
     }
 
     /// Creates an iterator over the satisfied spending conditions without checking signatures

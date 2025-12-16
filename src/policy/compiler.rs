@@ -1433,7 +1433,7 @@ mod tests {
 
         let bitcoinsig = bitcoin::ecdsa::Signature {
             signature,
-            sighash_type: bitcoin::sighash::EcdsaSighashType::All,
+            sighash_type: bitcoin::sighash::EcdsaSighashType::All.to_u32(),
         };
         let sigvec = bitcoinsig.to_vec();
 
