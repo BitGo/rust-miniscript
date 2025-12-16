@@ -218,9 +218,11 @@ impl<'txin> Interpreter<'txin> {
             KeySigPair::Ecdsa(key, ecdsa_sig) => {
                 let script_pubkey = self.script_code.as_ref().expect("Legacy have script code");
                 let msg = if self.is_legacy() {
-                    let sighash_u32 = ecdsa_sig.sighash_type.to_u32();
-                    let sighash =
-                        cache.legacy_signature_hash(input_idx, script_pubkey, sighash_u32);
+                    let sighash = cache.legacy_signature_hash(
+                        input_idx,
+                        script_pubkey,
+                        ecdsa_sig.sighash_type,
+                    );
                     sighash.map(|hash| secp256k1::Message::from_digest(hash.to_byte_array()))
                 } else if self.is_segwit_v0() {
                     let amt = match get_prevout(prevouts, input_idx) {
@@ -228,12 +230,10 @@ impl<'txin> Interpreter<'txin> {
                         None => return false,
                     };
                     // TODO: Don't manually handle the script code.
-                    let sighash = cache.p2wsh_signature_hash(
-                        input_idx,
-                        script_pubkey,
-                        amt,
-                        ecdsa_sig.sighash_type,
-                    );
+                    let sighash_type =
+                        bitcoin::sighash::EcdsaSighashType::from_consensus(ecdsa_sig.sighash_type);
+                    let sighash =
+                        cache.p2wsh_signature_hash(input_idx, script_pubkey, amt, sighash_type);
                     sighash.map(|hash| secp256k1::Message::from_digest(hash.to_byte_array()))
                 } else {
                     // taproot(or future) signatures in segwitv0 context
@@ -1101,7 +1101,7 @@ mod tests {
             let signature = secp.sign_ecdsa(&msg, &sk);
             ecdsa_sigs.push(bitcoin::ecdsa::Signature {
                 signature,
-                sighash_type: bitcoin::sighash::EcdsaSighashType::All,
+                sighash_type: bitcoin::sighash::EcdsaSighashType::All.to_u32(),
             });
             let mut sigser = signature.serialize_der().to_vec();
             sigser.push(0x01); // sighash_all

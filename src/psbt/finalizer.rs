@@ -566,7 +566,7 @@ mod tests {
             .to_secp_msg();
 
         // Sign with each key
-        let hash_ty = EcdsaSighashType::All;
+        let hash_ty = EcdsaSighashType::All.to_u32();
         for (secret_key, public_key) in signers {
             let signature = secp.sign_ecdsa(&msg, &secret_key);
             psbt.inputs[0]

@@ -1390,7 +1390,7 @@ mod tests {
                 if *pk == self.pk {
                     Some(bitcoin::ecdsa::Signature {
                         signature: self.sig,
-                        sighash_type: bitcoin::sighash::EcdsaSighashType::All,
+                        sighash_type: bitcoin::sighash::EcdsaSighashType::All.to_u32(),
                     })
                 } else {
                     None
@@ -1674,11 +1674,11 @@ mod tests {
 
             satisfier.insert(
                 a,
-                bitcoin::ecdsa::Signature { signature: sig_a, sighash_type: EcdsaSighashType::All },
+                bitcoin::ecdsa::Signature { signature: sig_a, sighash_type: EcdsaSighashType::All.to_u32() },
             );
             satisfier.insert(
                 b,
-                bitcoin::ecdsa::Signature { signature: sig_b, sighash_type: EcdsaSighashType::All },
+                bitcoin::ecdsa::Signature { signature: sig_b, sighash_type: EcdsaSighashType::All.to_u32() },
             );
 
             satisfier

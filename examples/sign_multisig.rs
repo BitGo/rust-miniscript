@@ -126,6 +126,6 @@ fn random_signature_from_the_blockchain() -> ecdsa::Signature {
              531d75c136272f127a5dc14acc0722301cbddc222262934151f140da345af177",
         )
         .unwrap(),
-        sighash_type: bitcoin::sighash::EcdsaSighashType::All,
+        sighash_type: bitcoin::sighash::EcdsaSighashType::All.to_u32(),
     }
 }
