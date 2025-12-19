@@ -543,6 +543,49 @@ pub trait PsbtExt {
         fork_id: Option<u32>,
     ) -> Result<(), Error>;
 
+    /// Finalize all inputs using Zcash ZIP-243 sighash algorithm.
+    ///
+    /// Use this for Zcash transparent inputs.
+    ///
+    /// # Arguments
+    /// * `secp` - Secp256k1 verification context
+    /// * `consensus_branch_id` - Zcash network upgrade branch ID
+    /// * `version_group_id` - Zcash transaction version group ID
+    /// * `expiry_height` - Transaction expiry height
+    fn finalize_mut_with_zcash<C: secp256k1::Verification>(
+        &mut self,
+        secp: &secp256k1::Secp256k1<C>,
+        consensus_branch_id: u32,
+        version_group_id: u32,
+        expiry_height: u32,
+    ) -> Result<(), Vec<Error>>;
+
+    /// Same as [`PsbtExt::finalize_mut_with_zcash`], but consumes self.
+    fn finalize_with_zcash<C: secp256k1::Verification>(
+        self,
+        secp: &secp256k1::Secp256k1<C>,
+        consensus_branch_id: u32,
+        version_group_id: u32,
+        expiry_height: u32,
+    ) -> Result<Psbt, (Psbt, Vec<Error>)>;
+
+    /// Same as [`PsbtExt::finalize_mut_with_zcash`], but only finalizes a single input.
+    ///
+    /// # Arguments
+    /// * `secp` - Secp256k1 verification context
+    /// * `index` - Input index to finalize
+    /// * `consensus_branch_id` - Zcash network upgrade branch ID
+    /// * `version_group_id` - Zcash transaction version group ID
+    /// * `expiry_height` - Transaction expiry height
+    fn finalize_inp_mut_with_zcash<C: secp256k1::Verification>(
+        &mut self,
+        secp: &secp256k1::Secp256k1<C>,
+        index: usize,
+        consensus_branch_id: u32,
+        version_group_id: u32,
+        expiry_height: u32,
+    ) -> Result<(), Error>;
+
     /// Psbt extractor as defined in BIP174 that takes in a psbt reference
     /// and outputs a extracted [`bitcoin::Transaction`].
     ///
@@ -774,6 +817,72 @@ impl PsbtExt for Psbt {
         }
         finalizer::finalize_input_with_fork_id(
             self, index, secp, /*allow_mall*/ false, fork_id,
+        )
+    }
+
+    fn finalize_mut_with_zcash<C: secp256k1::Verification>(
+        &mut self,
+        secp: &secp256k1::Secp256k1<C>,
+        consensus_branch_id: u32,
+        version_group_id: u32,
+        expiry_height: u32,
+    ) -> Result<(), Vec<Error>> {
+        let mut errors = vec![];
+        for index in 0..self.inputs.len() {
+            match finalizer::finalize_input_with_zcash(
+                self,
+                index,
+                secp,
+                /*allow_mall*/ false,
+                consensus_branch_id,
+                version_group_id,
+                expiry_height,
+            ) {
+                Ok(..) => {}
+                Err(e) => {
+                    errors.push(e);
+                }
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    fn finalize_with_zcash<C: secp256k1::Verification>(
+        mut self,
+        secp: &secp256k1::Secp256k1<C>,
+        consensus_branch_id: u32,
+        version_group_id: u32,
+        expiry_height: u32,
+    ) -> Result<Psbt, (Psbt, Vec<Error>)> {
+        match self.finalize_mut_with_zcash(secp, consensus_branch_id, version_group_id, expiry_height) {
+            Ok(..) => Ok(self),
+            Err(e) => Err((self, e)),
+        }
+    }
+
+    fn finalize_inp_mut_with_zcash<C: secp256k1::Verification>(
+        &mut self,
+        secp: &secp256k1::Secp256k1<C>,
+        index: usize,
+        consensus_branch_id: u32,
+        version_group_id: u32,
+        expiry_height: u32,
+    ) -> Result<(), Error> {
+        if index >= self.inputs.len() {
+            return Err(Error::InputIdxOutofBounds { psbt_inp: self.inputs.len(), index });
+        }
+        finalizer::finalize_input_with_zcash(
+            self,
+            index,
+            secp,
+            /*allow_mall*/ false,
+            consensus_branch_id,
+            version_group_id,
+            expiry_height,
         )
     }
 

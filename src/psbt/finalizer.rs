@@ -489,6 +489,246 @@ pub(super) fn finalize_input_with_fork_id<C: secp256k1::Verification>(
     Ok(())
 }
 
+/// Finalize a PSBT input using Zcash ZIP-243 sighash verification.
+///
+/// This function verifies signatures using the Zcash-specific sighash algorithm
+/// and constructs the final scriptSig. Zcash only supports legacy script types
+/// (P2PKH, P2SH) - no SegWit or Taproot.
+///
+/// # Arguments
+/// * `psbt` - The PSBT to finalize
+/// * `index` - Input index to finalize
+/// * `secp` - Secp256k1 verification context
+/// * `allow_mall` - Whether to allow malleable satisfaction
+/// * `consensus_branch_id` - Zcash network upgrade branch ID
+/// * `version_group_id` - Zcash transaction version group ID
+/// * `expiry_height` - Transaction expiry height
+pub(super) fn finalize_input_with_zcash<C: secp256k1::Verification>(
+    psbt: &mut Psbt,
+    index: usize,
+    secp: &Secp256k1<C>,
+    allow_mall: bool,
+    consensus_branch_id: u32,
+    version_group_id: u32,
+    expiry_height: u32,
+) -> Result<(), super::Error> {
+    let (witness, script_sig) = finalize_input_helper_with_zcash(
+        psbt,
+        index,
+        secp,
+        allow_mall,
+        consensus_branch_id,
+        version_group_id,
+        expiry_height,
+    )?;
+
+    // Now mutate the psbt input. Note that we cannot error after this point.
+    // If the input is mutated, it means that the finalization succeeded.
+    {
+        let original = mem::take(&mut psbt.inputs[index]);
+        let input = &mut psbt.inputs[index];
+        input.non_witness_utxo = original.non_witness_utxo;
+        input.witness_utxo = original.witness_utxo;
+        input.final_script_sig = if script_sig.is_empty() {
+            None
+        } else {
+            Some(script_sig)
+        };
+        input.final_script_witness = if witness.is_empty() {
+            None
+        } else {
+            Some(witness)
+        };
+    }
+
+    Ok(())
+}
+
+/// Helper function for Zcash input finalization with ZIP-243 sighash verification.
+fn finalize_input_helper_with_zcash<C: secp256k1::Verification>(
+    psbt: &Psbt,
+    index: usize,
+    secp: &Secp256k1<C>,
+    allow_mall: bool,
+    consensus_branch_id: u32,
+    version_group_id: u32,
+    expiry_height: u32,
+) -> Result<(Witness, ScriptBuf), super::Error> {
+    let spk = get_scriptpubkey(psbt, index).map_err(|e| super::Error::InputError(e, index))?;
+
+    // Zcash only supports legacy script types (P2PKH, P2SH)
+    // No SegWit or Taproot support
+    if spk.is_p2wpkh() || spk.is_p2wsh() || spk.is_p2tr() {
+        return Err(super::Error::InputError(
+            super::InputError::MiniscriptError(crate::Error::Unexpected(
+                "Zcash does not support SegWit or Taproot scripts".to_string(),
+            )),
+            index,
+        ));
+    }
+
+    // Create satisfier with Zcash sighash verification
+    let sat = ZcashPsbtInputSatisfier::new(psbt, index, secp, consensus_branch_id, version_group_id, expiry_height);
+
+    if spk.is_p2tr() {
+        // Already handled above, but keeping for completeness
+        return Err(super::Error::InputError(super::InputError::CouldNotSatisfyTr, index));
+    }
+
+    // Get a descriptor for this input (handles P2PKH, P2SH, and bare scripts)
+    let desc = get_descriptor(psbt, index).map_err(|e| super::Error::InputError(e, index))?;
+
+    // Generate the satisfaction witness and scriptsig
+    let (witness, script_sig) = if !allow_mall {
+        desc.get_satisfaction(&sat)
+    } else {
+        desc.get_satisfaction_mall(&sat)
+    }
+    .map_err(|e| super::Error::InputError(super::InputError::MiniscriptError(e), index))?;
+
+    let witness = Witness::from_slice(&witness);
+
+    // For Zcash, we skip the interpreter check since it uses a different sighash algorithm
+    // The signatures were already verified in the ZcashPsbtInputSatisfier
+
+    Ok((witness, script_sig))
+}
+
+/// Satisfier for Zcash PSBT inputs that verifies signatures using ZIP-243
+struct ZcashPsbtInputSatisfier<'a, C: secp256k1::Verification> {
+    psbt: &'a Psbt,
+    index: usize,
+    secp: &'a Secp256k1<C>,
+    consensus_branch_id: u32,
+    version_group_id: u32,
+    expiry_height: u32,
+}
+
+impl<'a, C: secp256k1::Verification> ZcashPsbtInputSatisfier<'a, C> {
+    fn new(
+        psbt: &'a Psbt,
+        index: usize,
+        secp: &'a Secp256k1<C>,
+        consensus_branch_id: u32,
+        version_group_id: u32,
+        expiry_height: u32,
+    ) -> Self {
+        Self { psbt, index, secp, consensus_branch_id, version_group_id, expiry_height }
+    }
+}
+
+impl<C: secp256k1::Verification> Satisfier<PublicKey> for ZcashPsbtInputSatisfier<'_, C> {
+    fn lookup_ecdsa_sig(&self, pk: &PublicKey) -> Option<bitcoin::ecdsa::Signature> {
+        use bitcoin::sighash::{SighashCache, SighashCacheZcashExt};
+
+        let input = &self.psbt.inputs[self.index];
+
+        // Get signature from partial_sigs
+        let sig = input.partial_sigs.get(pk)?;
+
+        // Verify signature using ZIP-243 sighash
+        let mut cache = SighashCache::new(&self.psbt.unsigned_tx);
+
+        let utxo = get_utxo(self.psbt, self.index).ok()?;
+        let spk = &utxo.script_pubkey;
+
+        // Determine the script code for sighash computation
+        let script_code = if spk.is_p2pkh() {
+            spk.clone()
+        } else if let Some(ref redeem) = input.redeem_script {
+            redeem.clone()
+        } else {
+            // For bare scripts, use the scriptPubKey itself
+            spk.clone()
+        };
+
+        let sighash = cache
+            .p2sh_signature_hash_zcash(
+                self.index,
+                &script_code,
+                utxo.value,
+                sig.sighash_type,
+                self.consensus_branch_id,
+                self.version_group_id,
+                self.expiry_height,
+            )
+            .ok()?;
+
+        let msg = secp256k1::Message::from(sighash);
+
+        // Verify the signature
+        if self.secp.verify_ecdsa(&msg, &sig.signature, &pk.inner).is_ok() {
+            Some(*sig)
+        } else {
+            None
+        }
+    }
+
+    fn lookup_raw_pkh_ecdsa_sig(
+        &self,
+        pkh: &hash160::Hash,
+    ) -> Option<(PublicKey, bitcoin::ecdsa::Signature)> {
+        let input = &self.psbt.inputs[self.index];
+
+        // Find a matching public key by hash
+        for (pk, _sig) in &input.partial_sigs {
+            if pk.pubkey_hash().as_raw_hash() == pkh {
+                if let Some(sig) = self.lookup_ecdsa_sig(pk) {
+                    return Some((*pk, sig));
+                }
+            }
+        }
+        None
+    }
+
+    fn check_after(&self, n: bitcoin::absolute::LockTime) -> bool {
+        if !self.psbt.unsigned_tx.input[self.index].enables_lock_time() {
+            return false;
+        }
+        let lock_time = self.psbt.unsigned_tx.lock_time;
+        <dyn Satisfier<PublicKey>>::check_after(&lock_time, n)
+    }
+
+    fn check_older(&self, n: bitcoin::relative::LockTime) -> bool {
+        let seq = self.psbt.unsigned_tx.input[self.index].sequence;
+        if self.psbt.unsigned_tx.version < bitcoin::transaction::Version::TWO
+            || !seq.is_relative_lock_time()
+        {
+            return false;
+        }
+        <dyn Satisfier<PublicKey>>::check_older(&seq, n)
+    }
+
+    fn lookup_hash160(&self, h: &<PublicKey as crate::MiniscriptKey>::Hash160) -> Option<crate::Preimage32> {
+        self.psbt.inputs[self.index]
+            .hash160_preimages
+            .get(h)
+            .and_then(|x: &Vec<u8>| <[u8; 32]>::try_from(&x[..]).ok())
+    }
+
+    fn lookup_sha256(&self, h: &<PublicKey as crate::MiniscriptKey>::Sha256) -> Option<crate::Preimage32> {
+        self.psbt.inputs[self.index]
+            .sha256_preimages
+            .get(h)
+            .and_then(|x: &Vec<u8>| <[u8; 32]>::try_from(&x[..]).ok())
+    }
+
+    fn lookup_hash256(&self, h: &<PublicKey as crate::MiniscriptKey>::Hash256) -> Option<crate::Preimage32> {
+        use bitcoin::hashes::{sha256d, Hash};
+        self.psbt.inputs[self.index]
+            .hash256_preimages
+            .get(&sha256d::Hash::from_byte_array(h.to_byte_array()))
+            .and_then(|x: &Vec<u8>| <[u8; 32]>::try_from(&x[..]).ok())
+    }
+
+    fn lookup_ripemd160(&self, h: &<PublicKey as crate::MiniscriptKey>::Ripemd160) -> Option<crate::Preimage32> {
+        self.psbt.inputs[self.index]
+            .ripemd160_preimages
+            .get(h)
+            .and_then(|x: &Vec<u8>| <[u8; 32]>::try_from(&x[..]).ok())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use hex;
