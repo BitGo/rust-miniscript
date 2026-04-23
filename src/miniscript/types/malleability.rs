@@ -94,6 +94,11 @@ impl Malleability {
         Malleability { dissat: Dissat::Unique, safe: true, non_malleable: true }
     }
 
+    /// Constructor for the malleability properties of the `payload_drop` fragment.
+    pub const fn payload_drop() -> Self {
+        Malleability { dissat: Dissat::None, safe: true, non_malleable: true }
+    }
+
     /// Constructor for the malleabilitiy properties of the `pk_h` fragment.
     pub const fn pk_h() -> Self {
         Malleability { dissat: Dissat::Unique, safe: true, non_malleable: true }

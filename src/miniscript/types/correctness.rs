@@ -137,6 +137,11 @@ impl Correctness {
         Correctness { base: Base::K, input: Input::OneNonZero, dissatisfiable: true, unit: true }
     }
 
+    /// Constructor for the correctness properties of the `payload_drop` fragment.
+    pub const fn payload_drop() -> Self {
+        Correctness { base: Base::V, input: Input::Zero, dissatisfiable: false, unit: false }
+    }
+
     /// Constructor for the correctness properties of the `pk_h` fragment.
     pub const fn pk_h() -> Self {
         Correctness {

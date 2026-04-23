@@ -104,6 +104,8 @@ pub enum Terminal<Pk: MiniscriptKey, Ctx: ScriptContext> {
     /// We don't have a generic over here because we don't want to user to have any abstract reasoning
     /// over raw descriptors.
     RawPkH(hash160::Hash),
+    /// `<payload> OP_DROP` — embeds arbitrary data with no effect on spending conditions
+    PayloadDrop(Vec<u8>),
     // timelocks
     /// `n CHECKLOCKTIMEVERIFY`
     After(AbsLockTime),
@@ -168,6 +170,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Clone for Terminal<Pk, Ctx> {
         match self {
             Terminal::PkK(ref p) => Terminal::PkK(p.clone()),
             Terminal::PkH(ref p) => Terminal::PkH(p.clone()),
+            Terminal::PayloadDrop(ref d) => Terminal::PayloadDrop(d.clone()),
             Terminal::RawPkH(ref p) => Terminal::RawPkH(*p),
             Terminal::After(ref n) => Terminal::After(*n),
             Terminal::Older(ref n) => Terminal::Older(*n),
@@ -227,6 +230,9 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> PartialEq for Terminal<Pk, Ctx> {
             match (me, you) {
                 (Terminal::PkK(key1), Terminal::PkK(key2)) if key1 != key2 => return false,
                 (Terminal::PkH(key1), Terminal::PkH(key2)) if key1 != key2 => return false,
+                (Terminal::PayloadDrop(d1), Terminal::PayloadDrop(d2)) if d1 != d2 => {
+                    return false
+                }
                 (Terminal::RawPkH(h1), Terminal::RawPkH(h2)) if h1 != h2 => return false,
                 (Terminal::After(t1), Terminal::After(t2)) if t1 != t2 => return false,
                 (Terminal::Older(t1), Terminal::Older(t2)) if t1 != t2 => return false,
@@ -255,6 +261,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> core::hash::Hash for Terminal<Pk, Ct
             match term {
                 Terminal::PkK(key) => key.hash(hasher),
                 Terminal::PkH(key) => key.hash(hasher),
+                Terminal::PayloadDrop(ref d) => d.hash(hasher),
                 Terminal::RawPkH(h) => h.hash(hasher),
                 Terminal::After(t) => t.hash(hasher),
                 Terminal::Older(t) => t.hash(hasher),

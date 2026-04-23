@@ -618,6 +618,11 @@ where
         while let Some(node_state) = self.state.pop() {
             //non-empty stack
             match node_state.node.node {
+                Terminal::PayloadDrop(..) => {
+                    debug_assert_eq!(node_state.n_evaluated, 0);
+                    debug_assert_eq!(node_state.n_satisfied, 0);
+                    // V-type leaf: payload is in the script (push then drop), no witness consumed
+                }
                 Terminal::True => {
                     debug_assert_eq!(node_state.n_evaluated, 0);
                     debug_assert_eq!(node_state.n_satisfied, 0);

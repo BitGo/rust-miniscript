@@ -1329,7 +1329,7 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfaction<Placeholder<Pk>> {
                 relative_timelock: None,
                 absolute_timelock: None,
             },
-            Terminal::True => Satisfaction {
+            Terminal::True | Terminal::PayloadDrop(..) => Satisfaction {
                 stack: Witness::empty(),
                 has_sig: false,
                 relative_timelock: None,
@@ -1626,6 +1626,7 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfaction<Placeholder<Pk>> {
                 absolute_timelock: None,
             },
             Terminal::True
+            | Terminal::PayloadDrop(..)
             | Terminal::Older(_)
             | Terminal::After(_)
             | Terminal::Verify(_)

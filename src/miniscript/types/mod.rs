@@ -221,6 +221,11 @@ impl Type {
     /// Constructor for the type of the `pk_k` fragment.
     pub const fn pk_k() -> Self { Type { corr: Correctness::pk_k(), mall: Malleability::pk_k() } }
 
+    /// Constructor for the type of the `payload_drop` fragment.
+    pub const fn payload_drop() -> Self {
+        Type { corr: Correctness::payload_drop(), mall: Malleability::payload_drop() }
+    }
+
     /// Constructor for the type of the `pk_h` fragment.
     pub const fn pk_h() -> Self { Type { corr: Correctness::pk_h(), mall: Malleability::pk_h() } }
 
@@ -467,6 +472,7 @@ impl Type {
         let ret = match *fragment {
             Terminal::True => Ok(Self::TRUE),
             Terminal::False => Ok(Self::FALSE),
+            Terminal::PayloadDrop(..) => Ok(Self::payload_drop()),
             Terminal::PkK(..) => Ok(Self::pk_k()),
             Terminal::PkH(..) | Terminal::RawPkH(..) => Ok(Self::pk_h()),
             Terminal::Multi(..) => Ok(Self::multi()),

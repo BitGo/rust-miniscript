@@ -270,6 +270,32 @@ impl ExtData {
         }
     }
 
+    /// Extra properties for the `payload_drop` fragment.
+    pub fn payload_drop(payload: &[u8]) -> Self {
+        let n = payload.len();
+        let push_overhead = match n {
+            0..=75 => 1,
+            76..=255 => 2,
+            256..=65535 => 3,
+            _ => 5,
+        };
+        ExtData {
+            pk_cost: push_overhead + n + 1, // push encoding + payload bytes + OP_DROP
+            has_free_verify: false,
+            static_ops: 1, // OP_DROP
+            sat_data: Some(SatData {
+                max_witness_stack_size: 0,
+                max_witness_stack_count: 0,
+                max_script_sig_size: 0,
+                max_exec_stack_count: 1, // payload transiently on stack before DROP
+                max_exec_op_count: 0,
+            }),
+            dissat_data: None,
+            timelock_info: TimelockInfo::new(),
+            tree_height: 0,
+        }
+    }
+
     /// Extra properties for the `multi` fragment.
     pub fn multi<Pk: MiniscriptKey>(
         thresh: &crate::Threshold<Pk, MAX_PUBKEYS_PER_MULTISIG>,
@@ -948,6 +974,7 @@ impl ExtData {
         let ret = match *fragment {
             Terminal::True => Self::TRUE,
             Terminal::False => Self::FALSE,
+            Terminal::PayloadDrop(ref d) => Self::payload_drop(d),
             Terminal::PkK(ref k) => Self::pk_k::<_, Ctx>(k),
             Terminal::PkH(ref k) => Self::pk_h::<_, Ctx>(Some(k)),
             Terminal::RawPkH(..) => Self::pk_h::<Pk, Ctx>(None),

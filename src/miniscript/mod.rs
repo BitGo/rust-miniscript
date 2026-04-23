@@ -99,6 +99,7 @@ mod private {
                     Terminal::Hash160(ref x) => Terminal::Hash160(x.clone()),
                     Terminal::True => Terminal::True,
                     Terminal::False => Terminal::False,
+                    Terminal::PayloadDrop(ref d) => Terminal::PayloadDrop(d.clone()),
                     Terminal::Alt(..) => Terminal::Alt(stack.pop().unwrap()),
                     Terminal::Swap(..) => Terminal::Swap(stack.pop().unwrap()),
                     Terminal::Check(..) => Terminal::Check(stack.pop().unwrap()),
@@ -373,6 +374,10 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Miniscript<Pk, Ctx> {
                 Terminal::Older(n) => script_num_size(n.to_consensus_u32() as usize) + 1,
                 Terminal::Verify(ref sub) => usize::from(!sub.ext.has_free_verify),
                 Terminal::Drop(..) => 1,
+                Terminal::PayloadDrop(ref d) => {
+                    let n = d.len();
+                    1 + n + match n { 0..=75 => 1, 76..=255 => 2, 256..=65535 => 3, _ => 5 }
+                }
                 Terminal::Thresh(ref thresh) => {
                     script_num_size(thresh.k()) // k
                         + 1 // EQUAL
@@ -694,6 +699,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Miniscript<Pk, Ctx> {
                 Terminal::Hash160(ref x) => Terminal::Hash160(t.hash160(x)?),
                 Terminal::True => Terminal::True,
                 Terminal::False => Terminal::False,
+                Terminal::PayloadDrop(ref d) => Terminal::PayloadDrop(d.clone()),
                 Terminal::Alt(..) => Terminal::Alt(translated.pop().unwrap()),
                 Terminal::Swap(..) => Terminal::Swap(translated.pop().unwrap()),
                 Terminal::Check(..) => Terminal::Check(translated.pop().unwrap()),
@@ -760,6 +766,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Miniscript<Pk, Ctx> {
                 Terminal::Hash160(ref x) => Terminal::Hash160(x.clone()),
                 Terminal::True => Terminal::True,
                 Terminal::False => Terminal::False,
+                Terminal::PayloadDrop(ref d) => Terminal::PayloadDrop(d.clone()),
                 Terminal::Alt(..) => Terminal::Alt(stack.pop().unwrap()),
                 Terminal::Swap(..) => Terminal::Swap(stack.pop().unwrap()),
                 Terminal::Check(..) => Terminal::Check(stack.pop().unwrap()),
@@ -936,6 +943,19 @@ impl<Pk: FromStrKey, Ctx: ScriptContext> FromTree for Miniscript<Pk, Ctx> {
                     .verify_terminal_parent("hash160", "hash")
                     .map(Miniscript::hash160)
                     .map_err(Error::Parse),
+                "payload_drop" => {
+                    node.verify_n_children("payload_drop", 1..=1)
+                        .map_err(From::from)
+                        .map_err(Error::Parse)?;
+                    let child = node.first_child().unwrap();
+                    child
+                        .verify_n_children("payload hex", 0..=0)
+                        .map_err(From::from)
+                        .map_err(Error::Parse)?;
+                    let payload = crate::hex::decode_to_vec(child.name())
+                        .map_err(|e| Error::Parse(crate::ParseError::box_from_str(e)))?;
+                    Miniscript::from_ast(Terminal::PayloadDrop(payload))
+                }
                 "1" => {
                     node.verify_n_children("1", 0..=0)
                         .map_err(From::from)

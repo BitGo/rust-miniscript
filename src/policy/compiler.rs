@@ -448,7 +448,7 @@ impl CompilerExtData {
         Ctx: ScriptContext,
     {
         match *fragment {
-            Terminal::True => Self::TRUE,
+            Terminal::True | Terminal::PayloadDrop(..) => Self::TRUE,
             Terminal::False => Self::FALSE,
             Terminal::PkK(..) => Self::pk_k::<Ctx>(),
             Terminal::PkH(..) | Terminal::RawPkH(..) => Self::pk_h::<Ctx>(),

@@ -5,6 +5,7 @@
 use core::{cmp, fmt};
 
 use bitcoin::hashes::hash160;
+use bitcoin::hex::DisplayHex as _;
 
 use crate::iter::{Tree, TreeLike};
 use crate::miniscript::types::Type;
@@ -24,6 +25,7 @@ enum DisplayNode<'a, Pk: MiniscriptKey, Ctx: ScriptContext> {
     Hash256(&'a Pk::Hash256),
     Ripemd160(&'a Pk::Ripemd160),
     Hash160(&'a Pk::Hash160),
+    Bytes(&'a [u8]),
 }
 
 #[derive(Clone)]
@@ -62,6 +64,7 @@ impl<'a, Pk: MiniscriptKey, Ctx: ScriptContext> TreeLike for DisplayNode<'a, Pk,
         match self {
             DisplayNode::Node(_, ref node) => match node {
                 Terminal::True | Terminal::False => Tree::Nullary,
+                Terminal::PayloadDrop(ref d) => Tree::Unary(DisplayNode::Bytes(d)),
                 Terminal::PkK(ref pk) | Terminal::PkH(ref pk) => Tree::Unary(DisplayNode::Key(pk)),
                 Terminal::RawPkH(ref pkh) => Tree::Unary(DisplayNode::RawKeyHash(pkh)),
                 Terminal::After(ref t) => Tree::Unary(DisplayNode::After(t)),
@@ -212,6 +215,9 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Terminal<Pk, Ctx> {
                 (DisplayTypes::None, DisplayNode::Hash256(ref h)) => fmt::Display::fmt(h, f)?,
                 (DisplayTypes::None, DisplayNode::Ripemd160(ref h)) => fmt::Display::fmt(h, f)?,
                 (DisplayTypes::None, DisplayNode::Hash160(ref h)) => fmt::Display::fmt(h, f)?,
+                (DisplayTypes::None, DisplayNode::Bytes(ref b)) => {
+                    write!(f, "{}", b.as_hex())?
+                }
                 (_, DisplayNode::ThresholdK(ref k)) => fmt::Debug::fmt(k, f)?,
                 (_, DisplayNode::Key(ref pk)) => fmt::Debug::fmt(pk, f)?,
                 (_, DisplayNode::RawKeyHash(ref h)) => fmt::Debug::fmt(h, f)?,
@@ -221,6 +227,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Terminal<Pk, Ctx> {
                 (_, DisplayNode::Hash256(ref h)) => fmt::Debug::fmt(h, f)?,
                 (_, DisplayNode::Ripemd160(ref h)) => fmt::Debug::fmt(h, f)?,
                 (_, DisplayNode::Hash160(ref h)) => fmt::Debug::fmt(h, f)?,
+                (_, DisplayNode::Bytes(ref b)) => write!(f, "{}", b.as_hex())?,
             }
         }
         Ok(())
@@ -236,6 +243,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Terminal<Pk, Ctx> {
         match *self {
             Terminal::True => "1",
             Terminal::False => "0",
+            Terminal::PayloadDrop(..) => "payload_drop",
             Terminal::PkK(..) => "pk_k",
             Terminal::PkH(..) => "pk_h",
             // `RawPkH` is currently unsupported in the descriptor spec. We temporarily
@@ -345,6 +353,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Ord for Terminal<Pk, Ctx> {
                         (DisplayNode::Hash256(me), DisplayNode::Hash256(you)) => me.cmp(you),
                         (DisplayNode::Ripemd160(me), DisplayNode::Ripemd160(you)) => me.cmp(you),
                         (DisplayNode::Hash160(me), DisplayNode::Hash160(you)) => me.cmp(you),
+                        (DisplayNode::Bytes(me), DisplayNode::Bytes(you)) => me.cmp(you),
                         _ => unreachable!(
                             "if the type of a node differs, its parent must have differed"
                         ),

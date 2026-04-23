@@ -87,6 +87,12 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Terminal<Pk, Ctx> {
                 .push_opcode(opcodes::all::OP_EQUAL),
             Terminal::True => builder.push_opcode(opcodes::OP_TRUE),
             Terminal::False => builder.push_opcode(opcodes::OP_FALSE),
+            Terminal::PayloadDrop(ref payload) => builder
+                .push_slice(
+                    <&script::PushBytes>::try_from(payload.as_slice())
+                        .expect("payload fits in script push limit"),
+                )
+                .push_opcode(opcodes::all::OP_DROP),
             Terminal::Alt(ref sub) => builder
                 .push_opcode(opcodes::all::OP_TOALTSTACK)
                 .push_astelem(sub)

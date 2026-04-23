@@ -129,7 +129,7 @@ let mut stack = vec![];
                 Terminal::Ripemd160(ref h) => Arc::new(Semantic::Ripemd160(h.clone())),
                 Terminal::Hash160(ref h) => Arc::new(Semantic::Hash160(h.clone())),
                 Terminal::False => Arc::new(Semantic::Unsatisfiable),
-                Terminal::True => Arc::new(Semantic::Trivial),
+                Terminal::True | Terminal::PayloadDrop(..) => Arc::new(Semantic::Trivial),
                 Terminal::Alt(..)
                 | Terminal::Swap(..)
                 | Terminal::Check(..)
