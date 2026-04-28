@@ -1128,8 +1128,11 @@ mod tests {
     use bitcoin::sighash::EcdsaSighashType;
     use bitcoin::{bip32, PublicKey, Sequence, XOnlyPublicKey};
 
+    use bitcoin::taproot::TapLeafHash;
+
     use super::{checksum, *};
     use crate::hex_script;
+    use crate::{ExtParams, Satisfier, ToPublicKey};
     #[cfg(feature = "compiler")]
     use crate::policy;
 
@@ -2706,5 +2709,96 @@ pk(03f28773c2d975288bc7d1d205c3748651b075fbc6610e58cddeeddf8f19405aa8))";
                 desc_str
             );
         }
+    }
+
+    #[test]
+    fn test_payload_drop_stacks_vectors() {
+        const SIGNERS_KEY: &str =
+            "c9c2312ca406dcb8eed50b829b5292f5fb3e846db0a556af61cc53834ce75421";
+        const DEPOSIT_LEAF: &str =
+            "c:and_v(payload_drop(\
+             0000000000013880051ad206838b7981a116c334e8cb1b950afb73eb54a5\
+             ),pk_k(c9c2312ca406dcb8eed50b829b5292f5fb3e846db0a556af61cc53834ce75421))";
+        const RECLAIM_LEAF: &str =
+            "and_v(r:older(1),multi_a(2,\
+             4d838759b2a74616a2298e0580ca815874f5e5a9d2dd1b2f0203b68c66fc6c1e,\
+             639779c4b700dc51ece012a0e20325fcafada22a4a122ffaa04d0c0ccae83943,\
+             d1d6084eac98303e9d28e082bfd9eadf0b8be033e223a17ad01df81bdaa8c7b2))";
+
+        let ext_params = ExtParams::sane().drop();
+        let desc_str = format!("tr({SIGNERS_KEY},{{{DEPOSIT_LEAF},{RECLAIM_LEAF}}})");
+        let desc =
+            Descriptor::<DefiniteDescriptorKey>::from_str_ext(&desc_str, &ext_params).unwrap();
+
+        let leaves: Vec<_> = desc.tap_tree_iter().collect();
+        let deposit_leaf = &leaves[0];
+        let reclaim_leaf = &leaves[1];
+        let deposit = deposit_leaf.miniscript();
+        let reclaim = reclaim_leaf.miniscript();
+
+        // Deposit leaf: OP_PUSHBYTES_30 <metadata> OP_DROP <key> OP_CHECKSIG
+        assert_eq!(
+            format!("{:x}", deposit.encode()),
+            "1e0000000000013880051ad206838b7981a116c334e8cb1b950afb73eb54a5\
+             7520c9c2312ca406dcb8eed50b829b5292f5fb3e846db0a556af61cc53834ce75421ac"
+        );
+        assert_eq!(
+            deposit_leaf.compute_tap_leaf_hash().to_string(),
+            "b14bbf1c6699b64429be4f11e1d4df7b75f16f68e7a86cb91c58daf024d0b379"
+        );
+
+        // Reclaim leaf: OP_1 OP_CSV OP_DROP + 2-of-3 multi_a
+        assert_eq!(
+            format!("{:x}", reclaim.encode()),
+            "51b275\
+             204d838759b2a74616a2298e0580ca815874f5e5a9d2dd1b2f0203b68c66fc6c1eac\
+             20639779c4b700dc51ece012a0e20325fcafada22a4a122ffaa04d0c0ccae83943ba\
+             20d1d6084eac98303e9d28e082bfd9eadf0b8be033e223a17ad01df81bdaa8c7b2ba529c"
+        );
+        assert_eq!(
+            reclaim_leaf.compute_tap_leaf_hash().to_string(),
+            "1e379caf8335dc3bd0af785d32d8135647ffa2ee76dd2c1bcc663ff424602ac0"
+        );
+
+        assert_eq!(
+            bitcoin::Address::from_script(
+                &desc.script_pubkey(),
+                bitcoin::Network::Regtest
+            )
+            .unwrap()
+            .to_string(),
+            "bcrt1p04m0dcwy53627k03x67wjzfn77x7zu85pmwnz653u4uzpl4qsg9qjsd60c"
+        );
+
+        struct AlwaysSatisfier(secp256k1::schnorr::Signature);
+        impl<Pk: ToPublicKey> Satisfier<Pk> for AlwaysSatisfier {
+            fn lookup_tap_leaf_script_sig(
+                &self,
+                _pk: &Pk,
+                _h: &TapLeafHash,
+            ) -> Option<bitcoin::taproot::Signature> {
+                Some(bitcoin::taproot::Signature {
+                    signature: self.0,
+                    sighash_type: bitcoin::sighash::TapSighashType::Default,
+                })
+            }
+            fn check_older(&self, _: bitcoin::relative::LockTime) -> bool { true }
+        }
+        let dummy_sig = secp256k1::schnorr::Signature::from_str(
+            "84526253c27c7aef56c7b71a5cd25bebb66dddda437826defc5b2568bde81f07\
+             84526253c27c7aef56c7b71a5cd25bebb66dddda437826defc5b2568bde81f07",
+        )
+        .unwrap();
+        let satisfier = AlwaysSatisfier(dummy_sig);
+
+        let deposit_wit = deposit.satisfy(&satisfier).unwrap();
+        assert_eq!(deposit_wit, vec![dummy_sig.as_ref().to_vec()]);
+
+        let reclaim_wit = reclaim.satisfy(&satisfier).unwrap();
+        // multi_a(2-of-3): k1 and k2 provide sigs; k3 (last, cheapest to omit) gets empty
+        assert_eq!(reclaim_wit.len(), 3);
+        assert_eq!(reclaim_wit[0], dummy_sig.as_ref().to_vec()); // k1 sig
+        assert_eq!(reclaim_wit[1], dummy_sig.as_ref().to_vec()); // k2 sig
+        assert_eq!(reclaim_wit[2], vec![]); // k3 unsatisfied
     }
 }
