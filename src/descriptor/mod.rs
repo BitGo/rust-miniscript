@@ -1047,6 +1047,17 @@ impl<Pk: FromStrKey> crate::expression::FromTree for Descriptor<Pk> {
 impl<Pk: FromStrKey> FromStr for Descriptor<Pk> {
     type Err = Error;
     fn from_str(s: &str) -> Result<Descriptor<Pk>, Error> {
+        Self::from_str_ext(s, &crate::miniscript::analyzable::ExtParams::sane())
+    }
+}
+
+impl<Pk: FromStrKey> Descriptor<Pk> {
+    /// Parse a descriptor from a string with custom ExtParams for taproot leaf validation.
+    ///
+    /// This allows more control over which miniscript analysis checks are applied to
+    /// taproot leaves. For example, to allow drop operations (r: wrapper) in taproot
+    /// descriptors, use `ExtParams::sane().drop()`.
+    pub fn from_str_ext(s: &str, ext_params: &crate::miniscript::analyzable::ExtParams) -> Result<Descriptor<Pk>, Error> {
         let top = expression::Tree::from_str(s)?;
         let ret = Self::from_tree(top.root())?;
         if let Descriptor::Tr(ref inner) = ret {
@@ -1055,7 +1066,7 @@ impl<Pk: FromStrKey> FromStr for Descriptor<Pk> {
             ret.sanity_check()?;
             for item in inner.leaves() {
                 item.miniscript()
-                    .ext_check(&crate::miniscript::analyzable::ExtParams::sane())?;
+                    .ext_check(ext_params)?;
             }
         }
         Ok(ret)
