@@ -721,6 +721,18 @@ impl Descriptor<DescriptorPublicKey> {
         secp: &secp256k1::Secp256k1<C>,
         s: &str,
     ) -> Result<(Descriptor<DescriptorPublicKey>, KeyMap), Error> {
+        Self::parse_descriptor_ext(secp, s, &crate::miniscript::analyzable::ExtParams::sane())
+    }
+
+    /// Like [`parse_descriptor`] but with custom [`ExtParams`] for taproot leaf validation.
+    ///
+    /// [`parse_descriptor`]: Self::parse_descriptor
+    /// [`ExtParams`]: crate::miniscript::analyzable::ExtParams
+    pub fn parse_descriptor_ext<C: secp256k1::Signing>(
+        secp: &secp256k1::Secp256k1<C>,
+        s: &str,
+        ext_params: &crate::miniscript::analyzable::ExtParams,
+    ) -> Result<(Descriptor<DescriptorPublicKey>, KeyMap), Error> {
         fn parse_key<C: secp256k1::Signing>(
             s: &str,
             key_map: &mut KeyMap,
@@ -780,7 +792,7 @@ impl Descriptor<DescriptorPublicKey> {
             }
         }
 
-        let descriptor = Descriptor::<String>::from_str(s)?;
+        let descriptor = Descriptor::<String>::from_str_ext(s, ext_params)?;
         let descriptor = descriptor
             .translate_pk(&mut keymap_pk)
             .map_err(TranslateErr::flatten)?;
