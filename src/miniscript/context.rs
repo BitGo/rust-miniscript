@@ -269,6 +269,7 @@ where
     fn check_global_validity<Pk: MiniscriptKey>(
         ms: &Miniscript<Pk, Self>,
     ) -> Result<(), ScriptContextError> {
+        Self::check_drop_fragments(ms)?;
         Self::check_global_consensus_validity(ms)?;
         Self::check_global_policy_validity(ms)?;
         Ok(())
@@ -869,6 +870,7 @@ impl ScriptContext for NoChecks {
     fn check_global_validity<Pk: MiniscriptKey>(
         ms: &Miniscript<Pk, Self>,
     ) -> Result<(), ScriptContextError> {
+        Self::check_drop_fragments(ms)?;
         Self::check_global_consensus_validity(ms)?;
         Self::check_global_policy_validity(ms)?;
         Ok(())

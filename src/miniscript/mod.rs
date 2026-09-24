@@ -311,7 +311,6 @@ mod private {
             if (res.ext.tree_height as u32) > MAX_RECURSION_DEPTH {
                 return Err(Error::MaxRecursiveDepthExceeded);
             }
-            Ctx::check_drop_fragments(&res)?;
             Ctx::check_global_validity(&res)?;
             Ok(res)
         }
@@ -1465,15 +1464,14 @@ mod tests {
         assert_eq!(abs.minimum_n_keys(), Some(3));
 
         roundtrip(&ms_str!("older(921)"), "OP_PUSHBYTES_2 9903 OP_CSV");
-        roundtrip(
-            &ms_str!("and_v(r:after(1024),1)"),
-            "OP_PUSHBYTES_2 0004 OP_CLTV OP_DROP OP_PUSHNUM_1",
-        );
-        roundtrip(
-            &ms_str!("and_v(r:older(1024),1)"),
-            "OP_PUSHBYTES_2 0004 OP_CSV OP_DROP OP_PUSHNUM_1",
-        );
-        roundtrip(&ms_str!("and_v(r:1,1)"), "OP_PUSHNUM_1 OP_DROP OP_PUSHNUM_1");
+        for (miniscript, script_hex) in [
+            ("and_v(r:after(1024),1)", "020004b17551"),
+            ("and_v(r:older(1024),1)", "020004b27551"),
+            ("and_v(r:1,1)", "517551"),
+        ] {
+            assert!(Segwitv0Script::from_str_insane(miniscript).is_err());
+            assert!(Segwitv0Script::decode_consensus(&hex_script(script_hex)).is_err());
+        }
 
         roundtrip(
             &ms_str!("sha256({})",sha256::Hash::hash(&[])),
@@ -1734,10 +1732,9 @@ mod tests {
     }
 
     #[test]
-    fn drop_verify_witness_equivalence() {
-        // Test that r: and v: wrappers have identical witness costs
-        // This validates that cast_drop correctly uses self.sat_cost
-        type SwMs = Miniscript<String, Segwitv0>;
+    fn taproot_drop_verify_witness_equivalence() {
+        // Test that r: and v: wrappers have identical witness costs in Taproot.
+        type TapMs = Miniscript<String, Tap>;
 
         // Test various base fragments wrapped with both r: and v:
         let test_cases = vec![
@@ -1747,9 +1744,9 @@ mod tests {
         ];
 
         for (base, description) in test_cases {
-            let with_drop = SwMs::from_str_insane(&format!("and_v(r:{},1)", base))
+            let with_drop = TapMs::from_str_insane(&format!("and_v(r:{},1)", base))
                 .expect(&format!("Failed to parse r:{} ({})", base, description));
-            let with_verify = SwMs::from_str_insane(&format!("and_v(v:{},1)", base))
+            let with_verify = TapMs::from_str_insane(&format!("and_v(v:{},1)", base))
                 .expect(&format!("Failed to parse v:{} ({})", base, description));
 
             // Both should have identical satisfaction sizes since they need the same witness

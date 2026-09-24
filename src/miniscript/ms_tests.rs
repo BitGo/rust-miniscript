@@ -8,13 +8,11 @@
 #[cfg(test)]
 mod tests {
     use core::fmt;
-
     use core::str::FromStr;
 
     use crate::descriptor::{DefiniteDescriptorKey, DescriptorPublicKey};
     use crate::miniscript::analyzable::ExtParams;
-    use crate::miniscript::types;
-    use crate::miniscript::Tap;
+    use crate::miniscript::{types, Tap};
     use crate::{Descriptor, Legacy, Miniscript, Segwitv0};
 
     struct TestType(types::Type);
@@ -76,11 +74,10 @@ mod tests {
     fn payload_drop_is_restricted_to_taproot_context() {
         let drop_enabled = ExtParams::sane().drop();
         for payload_size in [520, 521] {
-            let miniscript = format!(
-                "and_v(payload_drop({}),pk(A))",
-                "00".repeat(payload_size)
+            let miniscript = format!("and_v(payload_drop({}),pk(A))", "00".repeat(payload_size));
+            assert!(
+                Miniscript::<String, Segwitv0>::from_str_ext(&miniscript, &drop_enabled).is_err()
             );
-            assert!(Miniscript::<String, Segwitv0>::from_str_ext(&miniscript, &drop_enabled).is_err());
             assert!(Miniscript::<String, Legacy>::from_str_ext(&miniscript, &drop_enabled).is_err());
         }
 
@@ -92,15 +89,10 @@ mod tests {
     #[test]
     fn payload_drop_analysis_and_taproot_control() {
         let key = "c9c2312ca406dcb8eed50b829b5292f5fb3e846db0a556af61cc53834ce75421";
-        let miniscript = format!(
-            "c:and_v(payload_drop({}),pk_k({key}))",
-            "00".repeat(521)
-        );
-        let allowed = Miniscript::<String, Tap>::from_str_ext(
-            &miniscript,
-            &ExtParams::sane().drop(),
-        )
-        .unwrap();
+        let miniscript = format!("c:and_v(payload_drop({}),pk_k({key}))", "00".repeat(521));
+        let allowed =
+            Miniscript::<String, Tap>::from_str_ext(&miniscript, &ExtParams::sane().drop())
+                .unwrap();
         assert!(allowed.contains_drop());
         assert!(Miniscript::<String, Tap>::from_str_ext(&miniscript, &ExtParams::sane()).is_err());
     }
@@ -109,14 +101,15 @@ mod tests {
     fn descriptor_from_str_rejects_non_taproot_payload_drop() {
         let key = "02ae7c3c0ebc315a33151a1985ebb1fdcae72b3b91c38e3193c40ebabfffe9c343";
         for payload_size in [520, 521] {
-            let descriptor = format!(
-                "wsh(and_v(payload_drop({}),pk({key})))",
-                "00".repeat(payload_size)
-            );
+            let descriptor =
+                format!("wsh(and_v(payload_drop({}),pk({key})))", "00".repeat(payload_size));
             assert!(Descriptor::<DescriptorPublicKey>::from_str(&descriptor).is_err());
         }
         let legacy_descriptor = format!("sh(and_v(payload_drop(00),pk({key})))");
         assert!(Descriptor::<DescriptorPublicKey>::from_str(&legacy_descriptor).is_err());
+
+        let drop_wrapper = format!("wsh(and_v(r:after(1024),pk({key})))");
+        assert!(Descriptor::<DescriptorPublicKey>::from_str(&drop_wrapper).is_err());
     }
 
     #[test]
