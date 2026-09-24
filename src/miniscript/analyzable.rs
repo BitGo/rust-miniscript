@@ -230,7 +230,8 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Miniscript<Pk, Ctx> {
 
     /// Whether the given miniscript contains a drop fragment
     pub fn contains_drop(&self) -> bool {
-        self.iter().any(|ms| matches!(ms.node, Terminal::Drop(_)))
+        self.iter()
+            .any(|ms| matches!(ms.node, Terminal::Drop(_) | Terminal::PayloadDrop(_)))
     }
 
     /// Check whether the underlying Miniscript is safe under the current context

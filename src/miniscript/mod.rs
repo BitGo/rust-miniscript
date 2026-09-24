@@ -311,6 +311,7 @@ mod private {
             if (res.ext.tree_height as u32) > MAX_RECURSION_DEPTH {
                 return Err(Error::MaxRecursiveDepthExceeded);
             }
+            Ctx::check_drop_fragments(&res)?;
             Ctx::check_global_validity(&res)?;
             Ok(res)
         }

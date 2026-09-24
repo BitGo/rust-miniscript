@@ -61,6 +61,8 @@ pub enum ScriptContextError {
     StackSizeLimitExceeded { actual: usize, limit: usize },
     /// MultiA is only allowed in post tapscript
     MultiANotAllowed,
+    /// Drop fragments are only allowed in taproot scripts
+    DropFragmentsNotAllowed,
 }
 
 #[cfg(feature = "std")]
@@ -83,7 +85,8 @@ impl error::Error for ScriptContextError {
             | ImpossibleSatisfaction
             | TaprootMultiDisabled
             | StackSizeLimitExceeded { .. }
-            | MultiANotAllowed => None,
+            | MultiANotAllowed
+            | DropFragmentsNotAllowed => None,
         }
     }
 }
@@ -155,6 +158,9 @@ impl fmt::Display for ScriptContextError {
             }
             ScriptContextError::MultiANotAllowed => {
                 write!(f, "Multi a(CHECKSIGADD) only allowed post tapscript")
+            }
+            ScriptContextError::DropFragmentsNotAllowed => {
+                write!(f, "Drop fragments are not allowed outside taproot context")
             }
         }
     }
@@ -245,6 +251,17 @@ where
         _ms: &Miniscript<Pk, Self>,
     ) -> Result<(), ScriptContextError> {
         Ok(())
+    }
+
+    /// Check whether drop fragments are supported in the current context.
+    fn check_drop_fragments<Pk: MiniscriptKey>(
+        ms: &Miniscript<Pk, Self>,
+    ) -> Result<(), ScriptContextError> {
+        if ms.contains_drop() {
+            Err(ScriptContextError::DropFragmentsNotAllowed)
+        } else {
+            Ok(())
+        }
     }
 
     /// Check the consensus + policy(if not disabled) rules that are not based
@@ -576,6 +593,12 @@ pub enum Tap {}
 
 impl ScriptContext for Tap {
     type Key = bitcoin::secp256k1::XOnlyPublicKey;
+
+    fn check_drop_fragments<Pk: MiniscriptKey>(
+        _ms: &Miniscript<Pk, Self>,
+    ) -> Result<(), ScriptContextError> {
+        Ok(())
+    }
     fn check_terminal_non_malleable<Pk: MiniscriptKey>(
         _frag: &Terminal<Pk, Self>,
     ) -> Result<(), ScriptContextError> {
@@ -791,6 +814,12 @@ pub enum NoChecks {}
 impl ScriptContext for NoChecks {
     // todo: When adding support for interpreter, we need a enum with all supported keys here
     type Key = bitcoin::PublicKey;
+
+    fn check_drop_fragments<Pk: MiniscriptKey>(
+        _ms: &Miniscript<Pk, Self>,
+    ) -> Result<(), ScriptContextError> {
+        Ok(())
+    }
     fn check_terminal_non_malleable<Pk: MiniscriptKey>(
         _frag: &Terminal<Pk, Self>,
     ) -> Result<(), ScriptContextError> {
