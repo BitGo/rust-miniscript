@@ -1,3 +1,13 @@
+# Unreleased
+
+- Evaluate satisfaction and dissatisfaction once per Miniscript node in post-order,
+  avoiding exponential recomputation in nested branches. Witness copying remains
+  polynomial in script size; evaluation no longer recurses through subtrees.
+- Check context consensus and standardness resource limits before satisfaction or
+  template construction, including scripts decoded with relaxed parsing options.
+  Resource-invalid satisfaction returns a context error; planning templates are
+  impossible. This also protects descriptor planning and PSBT finalization.
+
 # # 12.3.1 - April 1, 2025
 
 - Silent fix for CVE-2025-43707 (crash on satisfaction of particularly crafted `thresh` fragments) [#798](https://github.com/rust-bitcoin/rust-miniscript/pull/798)

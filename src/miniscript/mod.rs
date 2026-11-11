@@ -433,11 +433,15 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Miniscript<Pk, Ctx> {
     }
 
     /// Attempt to produce non-malleable satisfying witness for the
-    /// witness script represented by the parse tree
+    /// witness script represented by the parse tree.
+    ///
+    /// Checks the context consensus and standardness resource limits before
+    /// querying the satisfier.
     pub fn satisfy<S: satisfy::Satisfier<Pk>>(&self, satisfier: S) -> Result<Vec<Vec<u8>>, Error>
     where
         Pk: ToPublicKey,
     {
+        Ctx::check_local_validity(self)?;
         // Only satisfactions for default versions (0xc0) are allowed.
         let satisfaction = satisfy::Satisfaction::satisfy(
             &self.node,
@@ -449,7 +453,10 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Miniscript<Pk, Ctx> {
     }
 
     /// Attempt to produce a malleable satisfying witness for the
-    /// witness script represented by the parse tree
+    /// witness script represented by the parse tree.
+    ///
+    /// Checks the context consensus and standardness resource limits before
+    /// querying the satisfier.
     pub fn satisfy_malleable<S: satisfy::Satisfier<Pk>>(
         &self,
         satisfier: S,
@@ -457,6 +464,7 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Miniscript<Pk, Ctx> {
     where
         Pk: ToPublicKey,
     {
+        Ctx::check_local_validity(self)?;
         let satisfaction = satisfy::Satisfaction::satisfy_mall(
             &self.node,
             &satisfier,
@@ -481,7 +489,10 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Miniscript<Pk, Ctx> {
         }
     }
 
-    /// Attempt to produce a non-malleable witness template given the assets available
+    /// Attempt to produce a non-malleable witness template given the assets available.
+    ///
+    /// Returns an impossible template without querying the provider if the
+    /// context consensus or standardness resource limits are exceeded.
     pub fn build_template<P: plan::AssetProvider<Pk>>(
         &self,
         provider: &P,
@@ -489,6 +500,14 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Miniscript<Pk, Ctx> {
     where
         Pk: ToPublicKey,
     {
+        if Ctx::check_local_validity(self).is_err() {
+            return satisfy::Satisfaction {
+                stack: satisfy::Witness::Impossible,
+                has_sig: false,
+                absolute_timelock: None,
+                relative_timelock: None,
+            };
+        }
         satisfy::Satisfaction::build_template(
             &self.node,
             provider,
@@ -497,7 +516,10 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Miniscript<Pk, Ctx> {
         )
     }
 
-    /// Attempt to produce a malleable witness template given the assets available
+    /// Attempt to produce a malleable witness template given the assets available.
+    ///
+    /// Returns an impossible template without querying the provider if the
+    /// context consensus or standardness resource limits are exceeded.
     pub fn build_template_mall<P: plan::AssetProvider<Pk>>(
         &self,
         provider: &P,
@@ -505,6 +527,14 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Miniscript<Pk, Ctx> {
     where
         Pk: ToPublicKey,
     {
+        if Ctx::check_local_validity(self).is_err() {
+            return satisfy::Satisfaction {
+                stack: satisfy::Witness::Impossible,
+                has_sig: false,
+                absolute_timelock: None,
+                relative_timelock: None,
+            };
+        }
         satisfy::Satisfaction::build_template_mall(
             &self.node,
             provider,
@@ -1881,6 +1911,180 @@ mod tests {
             script = script.push_opcode(bitcoin::opcodes::all::OP_0NOTEQUAL);
         }
         Tapscript::decode_insane(&script.into_script()).unwrap_err();
+    }
+
+    // Any lookup proves resource validation happened too late.
+    struct NoResourceLookups;
+
+    impl<Pk: crate::MiniscriptKey + ToPublicKey> Satisfier<Pk> for NoResourceLookups {
+        fn lookup_ecdsa_sig(&self, _: &Pk) -> Option<bitcoin::ecdsa::Signature> {
+            panic!("resource-invalid scripts must not query signatures")
+        }
+
+        fn lookup_tap_leaf_script_sig(
+            &self,
+            _: &Pk,
+            _: &TapLeafHash,
+        ) -> Option<bitcoin::taproot::Signature> {
+            panic!("resource-invalid scripts must not query signatures")
+        }
+
+        fn lookup_raw_pkh_pk(&self, _: &hash160::Hash) -> Option<bitcoin::PublicKey> {
+            panic!("resource-invalid scripts must not query public keys")
+        }
+
+        fn lookup_raw_pkh_ecdsa_sig(
+            &self,
+            _: &hash160::Hash,
+        ) -> Option<(bitcoin::PublicKey, bitcoin::ecdsa::Signature)> {
+            panic!("resource-invalid scripts must not query signatures")
+        }
+
+        fn check_after(&self, _: bitcoin::absolute::LockTime) -> bool {
+            panic!("resource-invalid scripts must not query timelocks")
+        }
+    }
+
+    fn assert_resource_rejected<Pk, Ctx>(ms: &Miniscript<Pk, Ctx>)
+    where
+        Pk: crate::MiniscriptKey + ToPublicKey,
+        Ctx: ScriptContext,
+    {
+        let error = Ctx::check_local_validity(ms).unwrap_err();
+        for template in [
+            ms.build_template(&NoResourceLookups),
+            ms.build_template_mall(&NoResourceLookups),
+        ] {
+            assert_eq!(template.stack, crate::miniscript::satisfy::Witness::Impossible);
+            assert!(!template.has_sig);
+            assert_eq!(template.absolute_timelock, None);
+            assert_eq!(template.relative_timelock, None);
+        }
+        assert!(matches!(ms.satisfy(NoResourceLookups), Err(Error::ContextError(e)) if e == error));
+        assert!(
+            matches!(ms.satisfy_malleable(NoResourceLookups), Err(Error::ContextError(e)) if e == error)
+        );
+    }
+
+    fn resource_timelock_script(verified_locks: usize) -> bitcoin::ScriptBuf {
+        let mut builder = bitcoin::script::Builder::new();
+        for _ in 0..verified_locks {
+            builder = builder
+                .push_int(1)
+                .push_opcode(bitcoin::opcodes::all::OP_CLTV)
+                .push_opcode(bitcoin::opcodes::all::OP_VERIFY);
+        }
+        builder
+            .push_int(1)
+            .push_opcode(bitcoin::opcodes::all::OP_CLTV)
+            .into_script()
+    }
+
+    #[test]
+    fn satisfaction_resource_limits_reject_decoded_opcode_overflow() {
+        let script = resource_timelock_script(101);
+        let legacy = Miniscript::<bitcoin::PublicKey, Legacy>::decode_insane(&script).unwrap();
+        let bare = Miniscript::<bitcoin::PublicKey, BareCtx>::decode_insane(&script).unwrap();
+        let segwit = Segwitv0Script::decode_insane(&script).unwrap();
+        assert_eq!(segwit.ext.ops.op_count(), Some(203));
+        assert_resource_rejected(&legacy);
+        assert_resource_rejected(&bare);
+        assert_resource_rejected(&segwit);
+    }
+
+    #[test]
+    fn satisfaction_resource_limits_reject_decoded_witness_overflow() {
+        let key = pubkeys(1)[0];
+        let multi = format!("multi(20,{})", vec![key.to_string(); 20].join(","));
+        let source = format!("and_v(v:{},", multi).repeat(4) + &multi + &")".repeat(4);
+        let script = Segwitv0Script::from_str_insane(&source).unwrap().encode();
+        let ms = Segwitv0Script::decode_insane(&script).unwrap();
+        assert_eq!(ms.max_satisfaction_witness_elements().unwrap(), 106);
+        assert!(matches!(
+            Segwitv0::check_local_validity(&ms),
+            Err(crate::miniscript::context::ScriptContextError::MaxWitnessItemsExceeded {
+                actual: 106,
+                limit: 100,
+            })
+        ));
+        assert_resource_rejected(&ms);
+    }
+
+    #[test]
+    fn satisfaction_resource_limits_reject_decoded_scriptsig_overflow() {
+        let pkh = format!("pkh({})", pubkeys(1)[0]);
+        let source = format!("and_v(v:{},", pkh).repeat(15) + &pkh + &")".repeat(15);
+        let script = Miniscript::<bitcoin::PublicKey, Legacy>::from_str_insane(&source)
+            .unwrap()
+            .encode();
+        let ms = Miniscript::<bitcoin::PublicKey, Legacy>::decode_with_ext(
+            &script,
+            &ExtParams::allow_all(),
+        )
+        .unwrap();
+        assert!(matches!(
+            Legacy::check_local_validity(&ms),
+            Err(crate::miniscript::context::ScriptContextError::MaxScriptSigSizeExceeded {
+                limit: 1650,
+                ..
+            })
+        ));
+        assert_resource_rejected(&ms);
+    }
+
+    #[test]
+    fn satisfaction_resource_limits_reject_decoded_tap_stack_overflow() {
+        let key = pubkeys(1)[0].inner.x_only_public_key().0;
+        let multi = format!("multi_a(1,{})", vec![key.to_string(); 999].join(","));
+        let source = format!("and_v(v:{},pk({}))", multi, key);
+        let script = Tapscript::from_str_insane(&source).unwrap().encode();
+        let ms = Tapscript::decode_insane(&script).unwrap();
+        assert!(matches!(
+            Tap::check_local_validity(&ms),
+            Err(crate::miniscript::context::ScriptContextError::StackSizeLimitExceeded {
+                limit: 1000,
+                ..
+            })
+        ));
+        assert_resource_rejected(&ms);
+    }
+
+    fn assert_valid_resource_timelocks<Ctx: ScriptContext>() {
+        let ms =
+            Miniscript::<Ctx::Key, Ctx>::decode_insane(&resource_timelock_script(100)).unwrap();
+        assert_eq!(ms.ext.ops.op_count(), Some(201));
+        let locktime = bitcoin::absolute::LockTime::from_height(1).unwrap();
+        for template in [
+            ms.build_template(&locktime),
+            ms.build_template_mall(&locktime),
+        ] {
+            assert_eq!(template.stack, crate::miniscript::satisfy::Witness::Stack(vec![]));
+            assert_eq!(
+                template.absolute_timelock,
+                Some(crate::AbsLockTime::from_consensus(1).unwrap())
+            );
+        }
+        assert_eq!(ms.satisfy(locktime).unwrap(), Vec::<Vec<u8>>::new());
+        assert_eq!(ms.satisfy_malleable(locktime).unwrap(), Vec::<Vec<u8>>::new());
+    }
+
+    #[test]
+    fn satisfaction_resource_limits_preserve_valid_decoded_scripts() {
+        assert_valid_resource_timelocks::<Legacy>();
+        assert_valid_resource_timelocks::<BareCtx>();
+        assert_valid_resource_timelocks::<Segwitv0>();
+        // Tapscript does not have the pre-Taproot 201-opcode limit.
+        assert_valid_resource_timelocks::<Tap>();
+        let ms = Tapscript::decode_insane(&resource_timelock_script(101)).unwrap();
+        let locktime = bitcoin::absolute::LockTime::from_height(1).unwrap();
+        for template in [
+            ms.build_template(&locktime),
+            ms.build_template_mall(&locktime),
+        ] {
+            assert_eq!(template.stack, crate::miniscript::satisfy::Witness::Stack(vec![]));
+        }
+        assert_eq!(ms.satisfy(locktime).unwrap(), Vec::<Vec<u8>>::new());
+        assert_eq!(ms.satisfy_malleable(locktime).unwrap(), Vec::<Vec<u8>>::new());
     }
 
     #[test]
