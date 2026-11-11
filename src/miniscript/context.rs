@@ -13,8 +13,9 @@ use crate::miniscript::limits::{
     MAX_OPS_PER_SCRIPT, MAX_SCRIPTSIG_SIZE, MAX_SCRIPT_ELEMENT_SIZE, MAX_SCRIPT_SIZE,
     MAX_STACK_SIZE, MAX_STANDARD_P2WSH_SCRIPT_SIZE, MAX_STANDARD_P2WSH_STACK_ITEMS,
 };
-use crate::miniscript::types;
+use crate::miniscript::{satisfy, types};
 use crate::prelude::*;
+use crate::util::{ItemSize};
 use crate::{hash256, Error, ForEachKey, Miniscript, MiniscriptKey, Terminal};
 
 /// Error for Script Context
@@ -247,6 +248,40 @@ where
         Ok(())
     }
 
+    /// Check the context resource limits that hold for the script itself,
+    /// regardless of which satisfaction path is chosen, such as the
+    /// opcode-count limits. Since no satisfaction path can avoid these
+    /// limits, they may be enforced before the satisfier queries the
+    /// provider.
+    ///
+    /// Defaults to the global checks plus the local consensus checks, which
+    /// are path-independent for the pre-Segwit-v1 contexts. Contexts whose
+    /// local consensus limits depend on the chosen satisfaction path, like
+    /// the Taproot stack-size limits, must override this method to exclude
+    /// those limits, which are then enforced on the chosen satisfaction by
+    /// [`ScriptContext::check_satisfaction_validity`].
+    fn check_static_validity<Pk: MiniscriptKey>(
+        ms: &Miniscript<Pk, Self>,
+    ) -> Result<(), ScriptContextError> {
+        Self::check_global_consensus_validity(ms)?;
+        Self::check_global_policy_validity(ms)?;
+        Self::check_local_consensus_validity(ms)
+    }
+
+    /// Check the context resource limits that depend on which satisfaction
+    /// path was chosen, against the satisfaction that was actually built.
+    /// This allows satisfying scripts that have over-limit satisfaction
+    /// paths as long as the chosen path itself fits the limits.
+    ///
+    /// Returns `Ok` for impossible or unavailable satisfactions, which do
+    /// not produce a witness to check. Defaults to `Ok` for contexts
+    /// without path-dependent limits.
+    fn check_satisfaction_validity<Pk: MiniscriptKey>(
+        _satisfaction: &satisfy::Satisfaction<satisfy::Placeholder<Pk>>,
+    ) -> Result<(), ScriptContextError> {
+        Ok(())
+    }
+
     /// Check the consensus + policy(if not disabled) rules that are not based
     /// satisfaction
     fn check_global_validity<Pk: MiniscriptKey>(
@@ -446,6 +481,23 @@ impl ScriptContext for Legacy {
         ms.ext.sat_data.map(|data| data.max_script_sig_size)
     }
 
+    fn check_satisfaction_validity<Pk: MiniscriptKey>(
+        satisfaction: &satisfy::Satisfaction<satisfy::Placeholder<Pk>>,
+    ) -> Result<(), ScriptContextError> {
+        if let satisfy::Witness::Stack(stack) = &satisfaction.stack {
+            // The typechecker accounts for the scriptSig cost as the sum of
+            // the push-encoded witness items of the satisfaction path.
+            let script_sig_size = stack.iter().map(|item| item.size()).sum::<usize>();
+            if script_sig_size > MAX_SCRIPTSIG_SIZE {
+                return Err(ScriptContextError::MaxScriptSigSizeExceeded {
+                    actual: script_sig_size,
+                    limit: MAX_SCRIPTSIG_SIZE,
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn pk_len<Pk: MiniscriptKey>(pk: &Pk) -> usize {
         if pk.is_uncompressed() {
             66
@@ -563,6 +615,23 @@ impl ScriptContext for Segwitv0 {
         ms.ext.sat_data.map(|data| data.max_witness_stack_size)
     }
 
+    fn check_satisfaction_validity<Pk: MiniscriptKey>(
+        satisfaction: &satisfy::Satisfaction<satisfy::Placeholder<Pk>>,
+    ) -> Result<(), ScriptContextError> {
+        if let satisfy::Witness::Stack(stack) = &satisfaction.stack {
+            // Account for the witness script item in the same way as
+            // `max_satisfaction_witness_elements`.
+            let witness_items = stack.len() + 1;
+            if witness_items > MAX_STANDARD_P2WSH_STACK_ITEMS {
+                return Err(ScriptContextError::MaxWitnessItemsExceeded {
+                    actual: witness_items,
+                    limit: MAX_STANDARD_P2WSH_STACK_ITEMS,
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn pk_len<Pk: MiniscriptKey>(_pk: &Pk) -> usize { 34 }
 
     fn name_str() -> &'static str { "Segwitv0" }
@@ -662,6 +731,36 @@ impl ScriptContext for Tap {
     fn check_local_policy_validity<Pk: MiniscriptKey>(
         _ms: &Miniscript<Pk, Self>,
     ) -> Result<(), ScriptContextError> {
+        Ok(())
+    }
+
+    fn check_static_validity<Pk: MiniscriptKey>(
+        ms: &Miniscript<Pk, Self>,
+    ) -> Result<(), ScriptContextError> {
+        // The Taproot stack-size limits depend on the chosen satisfaction
+        // path, so they are enforced against the built satisfaction by
+        // `check_satisfaction_validity` instead of up front.
+        Self::check_global_consensus_validity(ms)?;
+        Self::check_global_policy_validity(ms)
+    }
+
+    fn check_satisfaction_validity<Pk: MiniscriptKey>(
+        satisfaction: &satisfy::Satisfaction<satisfy::Placeholder<Pk>>,
+    ) -> Result<(), ScriptContextError> {
+        if let satisfy::Witness::Stack(stack) = &satisfaction.stack {
+            // The witness elements all reach the stack before the script
+            // executes, so a satisfaction with more elements than the
+            // stack limit is consensus-invalid whichever path is chosen.
+            // The stack usage during execution of the chosen path is
+            // enforced against the same limit when the witness is
+            // validated.
+            if stack.len() > MAX_STACK_SIZE {
+                return Err(ScriptContextError::StackSizeLimitExceeded {
+                    actual: stack.len(),
+                    limit: MAX_STACK_SIZE,
+                });
+            }
+        }
         Ok(())
     }
 

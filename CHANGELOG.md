@@ -1,3 +1,18 @@
+# Unreleased
+
+- Evaluate satisfaction and dissatisfaction once per Miniscript node in post-order,
+  avoiding exponential recomputation in nested branches. Child outcomes are released
+  as soon as their parent consumes them, keeping peak memory proportional to the live
+  node frontier; evaluation no longer recurses through subtrees.
+- Enforce the context resource limits that hold for every satisfaction path, such as
+  the opcode-count limits, before the satisfier is queried, including for scripts
+  decoded with relaxed parsing options. Limits that depend on the chosen path, such
+  as the Segwit witness-item, Legacy scriptSig and Taproot stack-size limits, are
+  enforced against the satisfaction that was actually built, so scripts with an
+  over-limit branch can still be satisfied through an in-limit path. Resource-invalid
+  satisfaction returns a context error; planning templates are impossible. This also
+  protects descriptor planning and PSBT finalization.
+  
 # 13.0.0 - October 22, 2025
 
 This release is a pretty big one and includes several significant refactors:
