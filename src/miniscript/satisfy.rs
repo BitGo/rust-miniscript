@@ -15,6 +15,7 @@ use bitcoin::{absolute, relative, ScriptBuf, Sequence};
 use sync::Arc;
 
 use super::context::SigType;
+use crate::iter::TreeLike;
 use crate::plan::AssetProvider;
 use crate::prelude::*;
 use crate::util::witness_size;
@@ -892,6 +893,26 @@ pub struct Satisfaction<T> {
     pub relative_timelock: Option<RelLockTime>,
 }
 
+/// The satisfaction and dissatisfaction of a single node, computed exactly
+/// once by the post-order pass of [`Satisfaction::build_template`].
+struct SatDissat<Pk: MiniscriptKey> {
+    sat: Satisfaction<Placeholder<Pk>>,
+    dissat: Satisfaction<Placeholder<Pk>>,
+}
+
+/// Post-order cache of the per-node outcomes, indexed by each node's
+/// position in the iteration. A child's outcomes are released as soon as
+/// its parent has consumed them, so the cache only holds the outcomes that
+/// are still reachable.
+type SatisfactionCache<Pk> = Vec<Option<SatDissat<Pk>>>;
+
+/// The shared post-order cache together with the child indices of the node
+/// currently being evaluated.
+struct NodeCache<'a, Pk: MiniscriptKey> {
+    cache: &'a SatisfactionCache<Pk>,
+    children: &'a [usize],
+}
+
 impl<Pk: MiniscriptKey + ToPublicKey> Satisfaction<Placeholder<Pk>> {
     /// The empty satisfaction.
     ///
@@ -931,14 +952,37 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfaction<Placeholder<Pk>> {
         Ctx: ScriptContext,
         P: AssetProvider<Pk>,
     {
-        Self::satisfy_helper(
-            term,
-            provider,
-            root_has_sig,
-            leaf_hash,
-            &mut Satisfaction::minimum,
-            &mut Satisfaction::thresh,
-        )
+        let mut cache: SatisfactionCache<Pk> = Vec::new();
+        // Every node is evaluated exactly once, in post-order, so that both
+        // child outcomes are available when their parent is evaluated. A
+        // child's outcomes are released as soon as its parent has consumed
+        // them: witnesses may be copied, but subtrees are never
+        // re-evaluated, and peak memory stays proportional to the live
+        // node frontier rather than the size of the whole tree.
+        for item in term.post_order_iter() {
+            let nodes = NodeCache { cache: &cache, children: &item.child_indices };
+            let sat = Self::satisfy_step(
+                item.node,
+                provider,
+                root_has_sig,
+                leaf_hash,
+                &mut Self::minimum,
+                &mut Self::thresh,
+                &nodes,
+            );
+            let dissat = Self::dissatisfy_step(item.node, &nodes, provider);
+            for &index in &item.child_indices {
+                cache[index] = None;
+            }
+            // Post-order indices are assigned in iteration order.
+            debug_assert_eq!(item.index, cache.len());
+            cache.push(Some(SatDissat { sat, dissat }));
+        }
+        // The root is evaluated last in post-order.
+        match cache.pop() {
+            Some(Some(SatDissat { sat, .. })) => sat,
+            _ => unreachable!("post-order evaluation always visits the root node"),
+        }
     }
 
     pub(crate) fn build_template_mall<P, Ctx>(
@@ -951,58 +995,70 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfaction<Placeholder<Pk>> {
         Ctx: ScriptContext,
         P: AssetProvider<Pk>,
     {
-        Self::satisfy_helper(
-            term,
-            provider,
-            root_has_sig,
-            leaf_hash,
-            &mut Satisfaction::minimum_mall,
-            &mut Satisfaction::thresh_mall,
-        )
+        let mut cache: SatisfactionCache<Pk> = Vec::new();
+        // Every node is evaluated exactly once, in post-order, so that both
+        // child outcomes are available when their parent is evaluated. A
+        // child's outcomes are released as soon as its parent has consumed
+        // them: witnesses may be copied, but subtrees are never
+        // re-evaluated, and peak memory stays proportional to the live
+        // node frontier rather than the size of the whole tree.
+        for item in term.post_order_iter() {
+            let nodes = NodeCache { cache: &cache, children: &item.child_indices };
+            let sat = Self::satisfy_step(
+                item.node,
+                provider,
+                root_has_sig,
+                leaf_hash,
+                &mut Self::minimum_mall,
+                &mut Self::thresh_mall,
+                &nodes,
+            );
+            let dissat = Self::dissatisfy_step(item.node, &nodes, provider);
+            for &index in &item.child_indices {
+                cache[index] = None;
+            }
+            // Post-order indices are assigned in iteration order.
+            debug_assert_eq!(item.index, cache.len());
+            cache.push(Some(SatDissat { sat, dissat }));
+        }
+        // The root is evaluated last in post-order.
+        match cache.pop() {
+            Some(Some(SatDissat { sat, .. })) => sat,
+            _ => unreachable!("post-order evaluation always visits the root node"),
+        }
+    }
+
+    fn cached(nodes: &NodeCache<'_, Pk>, index: usize, satisfied: bool) -> Self {
+        // Post-order evaluation stores both outcomes of every child before
+        // visiting the parent, and releases them only after the parent has
+        // consumed them.
+        let entry = nodes.cache[index]
+            .as_ref()
+            .expect("child outcomes were evaluated");
+        if satisfied {
+            entry.sat.clone()
+        } else {
+            entry.dissat.clone()
+        }
     }
 
     // produce a non-malleable satisafaction for thesh frag
-    fn thresh<Ctx, Sat, F>(
+    fn thresh<Ctx: ScriptContext>(
         thresh: &Threshold<Arc<Miniscript<Pk, Ctx>>, 0>,
-        stfr: &Sat,
-        root_has_sig: bool,
-        leaf_hash: &TapLeafHash,
-        min_fn: &mut F,
-    ) -> Self
-    where
-        Ctx: ScriptContext,
-        Sat: AssetProvider<Pk>,
-        F: FnMut(
-            Satisfaction<Placeholder<Pk>>,
-            Satisfaction<Placeholder<Pk>>,
-        ) -> Satisfaction<Placeholder<Pk>>,
-    {
+        nodes: &NodeCache<'_, Pk>,
+    ) -> Self {
+        let children = nodes.children;
+        debug_assert_eq!(children.len(), thresh.n());
         let mut sats = thresh
             .iter()
-            .map(|s| {
-                Self::satisfy_helper(
-                    &s.node,
-                    stfr,
-                    root_has_sig,
-                    leaf_hash,
-                    min_fn,
-                    &mut Self::thresh,
-                )
-            })
+            .enumerate()
+            .map(|(i, _)| Self::cached(nodes, children[i], true))
             .collect::<Vec<_>>();
         // Start with the to-return stack set to all dissatisfactions
         let mut ret_stack = thresh
             .iter()
-            .map(|s| {
-                Self::dissatisfy_helper(
-                    &s.node,
-                    stfr,
-                    root_has_sig,
-                    leaf_hash,
-                    min_fn,
-                    &mut Self::thresh,
-                )
-            })
+            .enumerate()
+            .map(|(i, _)| Self::cached(nodes, children[i], false))
             .collect::<Vec<_>>();
 
         // Sort everything by (sat cost - dissat cost), except that
@@ -1079,48 +1135,23 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfaction<Placeholder<Pk>> {
         }
     }
 
-    // produce a possibly malleable satisafaction for thesh frag
-    fn thresh_mall<Ctx, Sat, F>(
+    // produce a possily malleable satisafaction for thesh frag
+    fn thresh_mall<Ctx: ScriptContext>(
         thresh: &Threshold<Arc<Miniscript<Pk, Ctx>>, 0>,
-        stfr: &Sat,
-        root_has_sig: bool,
-        leaf_hash: &TapLeafHash,
-        min_fn: &mut F,
-    ) -> Self
-    where
-        Ctx: ScriptContext,
-        Sat: AssetProvider<Pk>,
-        F: FnMut(
-            Satisfaction<Placeholder<Pk>>,
-            Satisfaction<Placeholder<Pk>>,
-        ) -> Satisfaction<Placeholder<Pk>>,
-    {
+        nodes: &NodeCache<'_, Pk>,
+    ) -> Self {
+        let children = nodes.children;
+        debug_assert_eq!(children.len(), thresh.n());
         let mut sats = thresh
             .iter()
-            .map(|s| {
-                Self::satisfy_helper(
-                    &s.node,
-                    stfr,
-                    root_has_sig,
-                    leaf_hash,
-                    min_fn,
-                    &mut Self::thresh_mall,
-                )
-            })
+            .enumerate()
+            .map(|(i, _)| Self::cached(nodes, children[i], true))
             .collect::<Vec<_>>();
         // Start with the to-return stack set to all dissatisfactions
         let mut ret_stack = thresh
             .iter()
-            .map(|s| {
-                Self::dissatisfy_helper(
-                    &s.node,
-                    stfr,
-                    root_has_sig,
-                    leaf_hash,
-                    min_fn,
-                    &mut Self::thresh_mall,
-                )
-            })
+            .enumerate()
+            .map(|(i, _)| Self::cached(nodes, children[i], false))
             .collect::<Vec<_>>();
 
         // Sort everything by (sat cost - dissat cost), except that
@@ -1227,13 +1258,14 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfaction<Placeholder<Pk>> {
     }
 
     // produce a non-malleable satisfaction
-    fn satisfy_helper<Ctx, Sat, F, G>(
+    fn satisfy_step<Ctx, Sat, F, G>(
         term: &Terminal<Pk, Ctx>,
         stfr: &Sat,
         root_has_sig: bool,
         leaf_hash: &TapLeafHash,
         min_fn: &mut F,
         thresh_fn: &mut G,
+        nodes: &NodeCache<'_, Pk>,
     ) -> Self
     where
         Ctx: ScriptContext,
@@ -1244,12 +1276,10 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfaction<Placeholder<Pk>> {
         ) -> Satisfaction<Placeholder<Pk>>,
         G: FnMut(
             &Threshold<Arc<Miniscript<Pk, Ctx>>, 0>,
-            &Sat,
-            bool,
-            &TapLeafHash,
-            &mut F,
+            &NodeCache<'_, Pk>,
         ) -> Satisfaction<Placeholder<Pk>>,
     {
+        let children = nodes.children;
         match *term {
             Terminal::PkK(ref pk) => Satisfaction {
                 stack: Witness::signature::<_, Ctx>(stfr, pk, leaf_hash),
@@ -1341,24 +1371,15 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfaction<Placeholder<Pk>> {
                 relative_timelock: None,
                 absolute_timelock: None,
             },
-            Terminal::Alt(ref sub)
-            | Terminal::Swap(ref sub)
-            | Terminal::Check(ref sub)
-            | Terminal::Verify(ref sub)
-            | Terminal::Drop(ref sub)
-            | Terminal::NonZero(ref sub)
-            | Terminal::ZeroNotEqual(ref sub) => {
-                Self::satisfy_helper(&sub.node, stfr, root_has_sig, leaf_hash, min_fn, thresh_fn)
-            }
-            Terminal::DupIf(ref sub) => {
-                let sat = Self::satisfy_helper(
-                    &sub.node,
-                    stfr,
-                    root_has_sig,
-                    leaf_hash,
-                    min_fn,
-                    thresh_fn,
-                );
+            Terminal::Alt(..)
+            | Terminal::Swap(..)
+            | Terminal::Check(..)
+            | Terminal::Verify(..)
+            | Terminal::Drop(..)
+            | Terminal::NonZero(..)
+            | Terminal::ZeroNotEqual(..) => Self::cached(nodes, children[0], true),
+            Terminal::DupIf(..) => {
+                let sat = Self::cached(nodes, children[0], true);
                 Satisfaction {
                     stack: Witness::combine(sat.stack, Witness::push_1()),
                     has_sig: sat.has_sig,
@@ -1366,52 +1387,24 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfaction<Placeholder<Pk>> {
                     absolute_timelock: sat.absolute_timelock,
                 }
             }
-            Terminal::AndV(ref l, ref r) | Terminal::AndB(ref l, ref r) => {
-                let l_sat =
-                    Self::satisfy_helper(&l.node, stfr, root_has_sig, leaf_hash, min_fn, thresh_fn);
-                let r_sat =
-                    Self::satisfy_helper(&r.node, stfr, root_has_sig, leaf_hash, min_fn, thresh_fn);
+            Terminal::AndV(..) | Terminal::AndB(..) => {
+                let l_sat = Self::cached(nodes, children[0], true);
+                let r_sat = Self::cached(nodes, children[1], true);
                 l_sat.concatenate_rev(r_sat)
             }
-            Terminal::AndOr(ref a, ref b, ref c) => {
-                let a_sat =
-                    Self::satisfy_helper(&a.node, stfr, root_has_sig, leaf_hash, min_fn, thresh_fn);
-                let a_nsat = Self::dissatisfy_helper(
-                    &a.node,
-                    stfr,
-                    root_has_sig,
-                    leaf_hash,
-                    min_fn,
-                    thresh_fn,
-                );
-                let b_sat =
-                    Self::satisfy_helper(&b.node, stfr, root_has_sig, leaf_hash, min_fn, thresh_fn);
-                let c_sat =
-                    Self::satisfy_helper(&c.node, stfr, root_has_sig, leaf_hash, min_fn, thresh_fn);
+            Terminal::AndOr(..) => {
+                let a_sat = Self::cached(nodes, children[0], true);
+                let a_nsat = Self::cached(nodes, children[0], false);
+                let b_sat = Self::cached(nodes, children[1], true);
+                let c_sat = Self::cached(nodes, children[2], true);
 
                 min_fn(a_sat.concatenate_rev(b_sat), a_nsat.concatenate_rev(c_sat))
             }
-            Terminal::OrB(ref l, ref r) => {
-                let l_sat =
-                    Self::satisfy_helper(&l.node, stfr, root_has_sig, leaf_hash, min_fn, thresh_fn);
-                let r_sat =
-                    Self::satisfy_helper(&r.node, stfr, root_has_sig, leaf_hash, min_fn, thresh_fn);
-                let l_nsat = Self::dissatisfy_helper(
-                    &l.node,
-                    stfr,
-                    root_has_sig,
-                    leaf_hash,
-                    min_fn,
-                    thresh_fn,
-                );
-                let r_nsat = Self::dissatisfy_helper(
-                    &r.node,
-                    stfr,
-                    root_has_sig,
-                    leaf_hash,
-                    min_fn,
-                    thresh_fn,
-                );
+            Terminal::OrB(..) => {
+                let l_sat = Self::cached(nodes, children[0], true);
+                let r_sat = Self::cached(nodes, children[1], true);
+                let l_nsat = Self::cached(nodes, children[0], false);
+                let r_nsat = Self::cached(nodes, children[1], false);
 
                 assert!(!l_nsat.has_sig);
                 assert!(!r_nsat.has_sig);
@@ -1421,29 +1414,18 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfaction<Placeholder<Pk>> {
                     Satisfaction::concatenate_rev(l_sat, r_nsat),
                 )
             }
-            Terminal::OrD(ref l, ref r) | Terminal::OrC(ref l, ref r) => {
-                let l_sat =
-                    Self::satisfy_helper(&l.node, stfr, root_has_sig, leaf_hash, min_fn, thresh_fn);
-                let r_sat =
-                    Self::satisfy_helper(&r.node, stfr, root_has_sig, leaf_hash, min_fn, thresh_fn);
-                let l_nsat = Self::dissatisfy_helper(
-                    &l.node,
-                    stfr,
-                    root_has_sig,
-                    leaf_hash,
-                    min_fn,
-                    thresh_fn,
-                );
+            Terminal::OrD(..) | Terminal::OrC(..) => {
+                let l_sat = Self::cached(nodes, children[0], true);
+                let r_sat = Self::cached(nodes, children[1], true);
+                let l_nsat = Self::cached(nodes, children[0], false);
 
                 assert!(!l_nsat.has_sig);
 
                 min_fn(l_sat, Satisfaction::concatenate_rev(l_nsat, r_sat))
             }
-            Terminal::OrI(ref l, ref r) => {
-                let l_sat =
-                    Self::satisfy_helper(&l.node, stfr, root_has_sig, leaf_hash, min_fn, thresh_fn);
-                let r_sat =
-                    Self::satisfy_helper(&r.node, stfr, root_has_sig, leaf_hash, min_fn, thresh_fn);
+            Terminal::OrI(..) => {
+                let l_sat = Self::cached(nodes, children[0], true);
+                let r_sat = Self::cached(nodes, children[1], true);
                 min_fn(
                     Satisfaction {
                         stack: Witness::combine(l_sat.stack, Witness::push_1()),
@@ -1464,19 +1446,11 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfaction<Placeholder<Pk>> {
                     // this is just an and
                     thresh
                         .iter()
-                        .map(|s| {
-                            Self::satisfy_helper(
-                                &s.node,
-                                stfr,
-                                root_has_sig,
-                                leaf_hash,
-                                min_fn,
-                                thresh_fn,
-                            )
-                        })
+                        .enumerate()
+                        .map(|(i, _)| Self::cached(nodes, children[i], true))
                         .fold(Satisfaction::empty(), Satisfaction::concatenate_rev)
                 } else {
-                    thresh_fn(thresh, stfr, root_has_sig, leaf_hash, min_fn)
+                    thresh_fn(thresh, nodes)
                 }
             }
             Terminal::Multi(ref thresh) => {
@@ -1571,29 +1545,12 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfaction<Placeholder<Pk>> {
     }
 
     // Helper function to produce a dissatisfaction
-    fn dissatisfy_helper<Ctx, Sat, F, G>(
+    fn dissatisfy_step<Ctx: ScriptContext, Sat: AssetProvider<Pk>>(
         term: &Terminal<Pk, Ctx>,
+        nodes: &NodeCache<'_, Pk>,
         stfr: &Sat,
-        root_has_sig: bool,
-        leaf_hash: &TapLeafHash,
-        min_fn: &mut F,
-        thresh_fn: &mut G,
-    ) -> Self
-    where
-        Ctx: ScriptContext,
-        Sat: AssetProvider<Pk>,
-        F: FnMut(
-            Satisfaction<Placeholder<Pk>>,
-            Satisfaction<Placeholder<Pk>>,
-        ) -> Satisfaction<Placeholder<Pk>>,
-        G: FnMut(
-            &Threshold<Arc<Miniscript<Pk, Ctx>>, 0>,
-            &Sat,
-            bool,
-            &TapLeafHash,
-            &mut F,
-        ) -> Satisfaction<Placeholder<Pk>>,
-    {
+    ) -> Self {
+        let children = nodes.children;
         match *term {
             Terminal::PkK(..) => Satisfaction {
                 stack: Witness::push_0(),
@@ -1646,62 +1603,28 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfaction<Placeholder<Pk>> {
                 relative_timelock: None,
                 absolute_timelock: None,
             },
-            Terminal::Alt(ref sub)
-            | Terminal::Swap(ref sub)
-            | Terminal::Check(ref sub)
-            | Terminal::ZeroNotEqual(ref sub) => {
-                Self::dissatisfy_helper(&sub.node, stfr, root_has_sig, leaf_hash, min_fn, thresh_fn)
-            }
+            Terminal::Alt(..)
+            | Terminal::Swap(..)
+            | Terminal::Check(..)
+            | Terminal::ZeroNotEqual(..) => Self::cached(nodes, children[0], false),
             Terminal::DupIf(_) | Terminal::NonZero(_) => Satisfaction {
                 stack: Witness::push_0(),
                 has_sig: false,
                 relative_timelock: None,
                 absolute_timelock: None,
             },
-            Terminal::AndV(ref v, ref other) => {
-                let vsat =
-                    Self::satisfy_helper(&v.node, stfr, root_has_sig, leaf_hash, min_fn, thresh_fn);
-                let odissat = Self::dissatisfy_helper(
-                    &other.node,
-                    stfr,
-                    root_has_sig,
-                    leaf_hash,
-                    min_fn,
-                    thresh_fn,
-                );
+            Terminal::AndV(..) => {
+                let vsat = Self::cached(nodes, children[0], true);
+                let odissat = Self::cached(nodes, children[1], false);
                 vsat.concatenate_rev(odissat)
             }
-            Terminal::AndB(ref l, ref r)
-            | Terminal::OrB(ref l, ref r)
-            | Terminal::OrD(ref l, ref r)
-            | Terminal::AndOr(ref l, _, ref r) => {
-                let lnsat = Self::dissatisfy_helper(
-                    &l.node,
-                    stfr,
-                    root_has_sig,
-                    leaf_hash,
-                    min_fn,
-                    thresh_fn,
-                );
-                let rnsat = Self::dissatisfy_helper(
-                    &r.node,
-                    stfr,
-                    root_has_sig,
-                    leaf_hash,
-                    min_fn,
-                    thresh_fn,
-                );
+            Terminal::AndB(..) | Terminal::OrB(..) | Terminal::OrD(..) | Terminal::AndOr(..) => {
+                let lnsat = Self::cached(nodes, children[0], false);
+                let rnsat = Self::cached(nodes, children[1], false);
                 lnsat.concatenate_rev(rnsat)
             }
-            Terminal::OrI(ref l, ref r) => {
-                let lnsat = Self::dissatisfy_helper(
-                    &l.node,
-                    stfr,
-                    root_has_sig,
-                    leaf_hash,
-                    min_fn,
-                    thresh_fn,
-                );
+            Terminal::OrI(..) => {
+                let lnsat = Self::cached(nodes, children[0], false);
                 let dissat_1 = Satisfaction {
                     stack: Witness::combine(lnsat.stack, Witness::push_1()),
                     has_sig: lnsat.has_sig,
@@ -1709,14 +1632,7 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfaction<Placeholder<Pk>> {
                     absolute_timelock: None,
                 };
 
-                let rnsat = Self::dissatisfy_helper(
-                    &r.node,
-                    stfr,
-                    root_has_sig,
-                    leaf_hash,
-                    min_fn,
-                    thresh_fn,
-                );
+                let rnsat = Self::cached(nodes, children[1], false);
                 let dissat_2 = Satisfaction {
                     stack: Witness::combine(rnsat.stack, Witness::push_0()),
                     has_sig: rnsat.has_sig,
@@ -1729,16 +1645,8 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfaction<Placeholder<Pk>> {
             }
             Terminal::Thresh(ref thresh) => thresh
                 .iter()
-                .map(|s| {
-                    Self::dissatisfy_helper(
-                        &s.node,
-                        stfr,
-                        root_has_sig,
-                        leaf_hash,
-                        min_fn,
-                        thresh_fn,
-                    )
-                })
+                .enumerate()
+                .map(|(i, _)| Self::cached(nodes, children[i], false))
                 .fold(Satisfaction::empty(), Satisfaction::concatenate_rev),
             Terminal::Multi(ref thresh) => Satisfaction {
                 stack: Witness::Stack(vec![Placeholder::PushZero; thresh.k() + 1]),
@@ -1777,38 +1685,79 @@ impl<Pk: MiniscriptKey + ToPublicKey> Satisfaction<Placeholder<Pk>> {
     }
 }
 
-impl Satisfaction<Vec<u8>> {
-    /// Produce a satisfaction non-malleable satisfaction
-    pub(super) fn satisfy<Ctx, Pk, Sat>(
-        term: &Terminal<Pk, Ctx>,
-        stfr: &Sat,
-        root_has_sig: bool,
-        leaf_hash: &TapLeafHash,
-    ) -> Self
-    where
-        Ctx: ScriptContext,
-        Pk: MiniscriptKey + ToPublicKey,
-        Sat: Satisfier<Pk>,
-    {
-        Satisfaction::<Placeholder<Pk>>::build_template(term, &stfr, root_has_sig, leaf_hash)
-            .try_completing(stfr)
-            .expect("the same satisfier should manage to complete the template")
+#[cfg(test)]
+mod tests {
+    use core::cell::Cell;
+    use core::str::FromStr;
+
+    use bitcoin::key::XOnlyPublicKey;
+
+    use super::*;
+    use crate::{ExtParams, Tap};
+
+    struct CountingAssets {
+        calls: Cell<usize>,
+        available: Cell<bool>,
     }
 
-    /// Produce a satisfaction(possibly malleable)
-    pub(super) fn satisfy_mall<Ctx, Pk, Sat>(
-        term: &Terminal<Pk, Ctx>,
-        stfr: &Sat,
-        root_has_sig: bool,
-        leaf_hash: &TapLeafHash,
-    ) -> Self
-    where
-        Ctx: ScriptContext,
-        Pk: MiniscriptKey + ToPublicKey,
-        Sat: Satisfier<Pk>,
-    {
-        Satisfaction::<Placeholder<Pk>>::build_template_mall(term, &stfr, root_has_sig, leaf_hash)
-            .try_completing(stfr)
-            .expect("the same satisfier should manage to complete the template")
+    impl AssetProvider<XOnlyPublicKey> for CountingAssets {
+        fn provider_lookup_tap_leaf_script_sig(
+            &self,
+            _: &XOnlyPublicKey,
+            _: &TapLeafHash,
+        ) -> Option<usize> {
+            self.calls.set(self.calls.get() + 1);
+            if self.available.get() {
+                Some(64)
+            } else {
+                None
+            }
+        }
+    }
+
+    #[test]
+    fn nested_branch_planning_queries_each_key_once() {
+        let key = XOnlyPublicKey::from_str(
+            "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        )
+        .unwrap();
+        // Each nesting level adds ~5 AST levels and template building recurses
+        // over all of them; depth 100 overflows the default test-thread stack.
+        // The exact query-count assertions below hold at any depth.
+        let depth = 30;
+        for branch in 0..4 {
+            let mut script = format!("pk({})", key);
+            for _ in 0..depth {
+                script = match branch {
+                    0 => format!("or_b(utv:{},s:pk({}))", script, key),
+                    1 => format!("or_d(utv:{},pk({}))", script, key),
+                    2 => format!("andor(utv:{},pk({}),pk({}))", script, key, key),
+                    _ => format!("thresh(1,utv:{},s:pk({}))", script, key),
+                };
+            }
+            let ms =
+                Miniscript::<XOnlyPublicKey, Tap>::from_str_ext(&script, &ExtParams::allow_all())
+                    .unwrap();
+            let assets = CountingAssets { calls: Cell::new(0), available: Cell::new(true) };
+            let expected_calls = 1 + depth * if branch == 2 { 2 } else { 1 };
+            for malleable in [false, true] {
+                for available in [true, false] {
+                    assets.calls.set(0);
+                    assets.available.set(available);
+                    let sat = if malleable {
+                        ms.build_template_mall(&assets)
+                    } else {
+                        ms.build_template(&assets)
+                    };
+                    if available {
+                        assert!(matches!(sat.stack, Witness::Stack(_)));
+                        assert!(sat.has_sig);
+                    } else {
+                        assert_eq!(sat.stack, Witness::Impossible);
+                    }
+                    assert_eq!(assets.calls.get(), expected_calls);
+                }
+            }
+        }
     }
 }
