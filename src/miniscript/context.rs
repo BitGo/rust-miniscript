@@ -61,7 +61,7 @@ pub enum ScriptContextError {
     StackSizeLimitExceeded { actual: usize, limit: usize },
     /// MultiA is only allowed in post tapscript
     MultiANotAllowed,
-    /// Drop fragments are only allowed in taproot scripts
+    /// payload_drop fragments are only allowed in taproot scripts
     DropFragmentsNotAllowed,
 }
 
@@ -160,7 +160,7 @@ impl fmt::Display for ScriptContextError {
                 write!(f, "Multi a(CHECKSIGADD) only allowed post tapscript")
             }
             ScriptContextError::DropFragmentsNotAllowed => {
-                write!(f, "Drop fragments are not allowed outside taproot context")
+                write!(f, "payload_drop fragments are not allowed outside taproot context")
             }
         }
     }
@@ -253,11 +253,16 @@ where
         Ok(())
     }
 
-    /// Check whether drop fragments are supported in the current context.
+    /// Check whether payload_drop fragments are supported in the current
+    /// context. Only payload_drop is gated: it is the single fragment that can
+    /// carry an attacker-sized push, which is consensus-unspendable in
+    /// Segwitv0/Legacy once over 520 bytes (CSHLD-2341). The r: wrapper
+    /// (Terminal::Drop) only discards a normal fragment result and stays
+    /// legal outside taproot.
     fn check_drop_fragments<Pk: MiniscriptKey>(
         ms: &Miniscript<Pk, Self>,
     ) -> Result<(), ScriptContextError> {
-        if ms.contains_drop() {
+        if ms.contains_payload_drop() {
             Err(ScriptContextError::DropFragmentsNotAllowed)
         } else {
             Ok(())

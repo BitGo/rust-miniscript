@@ -81,9 +81,11 @@ mod tests {
             assert!(Miniscript::<String, Legacy>::from_str_ext(&miniscript, &drop_enabled).is_err());
         }
 
+        // The r: wrapper (Terminal::Drop) carries no payload: with drop
+        // parsing enabled it stays legal outside taproot (CSHLD-2341).
         let drop_wrapper = "and_v(r:after(1024),pk(A))";
-        assert!(Miniscript::<String, Segwitv0>::from_str_ext(drop_wrapper, &drop_enabled).is_err());
-        assert!(Miniscript::<String, Legacy>::from_str_ext(drop_wrapper, &drop_enabled).is_err());
+        assert!(Miniscript::<String, Segwitv0>::from_str_ext(drop_wrapper, &drop_enabled).is_ok());
+        assert!(Miniscript::<String, Legacy>::from_str_ext(drop_wrapper, &drop_enabled).is_ok());
     }
 
     #[test]
@@ -108,8 +110,27 @@ mod tests {
         let legacy_descriptor = format!("sh(and_v(payload_drop(00),pk({key})))");
         assert!(Descriptor::<DescriptorPublicKey>::from_str(&legacy_descriptor).is_err());
 
+        // Terminal::Drop (r:) carries no payload, so the context gate leaves
+        // it legal in Segwitv0 (CoreDAO staking descriptors, CSHLD-2341);
+        // descriptor-level parsing accepts it with or without drop enabled.
+        // The ExtParams drop gate still applies to bare miniscript parsing
+        // with default (sane) params.
         let drop_wrapper = format!("wsh(and_v(r:after(1024),pk({key})))");
-        assert!(Descriptor::<DescriptorPublicKey>::from_str(&drop_wrapper).is_err());
+        assert!(Descriptor::<DescriptorPublicKey>::from_str(&drop_wrapper).is_ok());
+        assert!(
+            Descriptor::<DescriptorPublicKey>::from_str_ext(
+                &drop_wrapper,
+                &ExtParams::sane().drop(),
+            )
+            .is_ok()
+        );
+        assert!(
+            Miniscript::<String, Segwitv0>::from_str_ext(
+                "and_v(r:after(1024),pk(A))",
+                &ExtParams::sane(),
+            )
+            .is_err()
+        );
     }
 
     #[test]

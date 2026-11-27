@@ -1464,14 +1464,17 @@ mod tests {
         assert_eq!(abs.minimum_n_keys(), Some(3));
 
         roundtrip(&ms_str!("older(921)"), "OP_PUSHBYTES_2 9903 OP_CSV");
-        for (miniscript, script_hex) in [
-            ("and_v(r:after(1024),1)", "020004b17551"),
-            ("and_v(r:older(1024),1)", "020004b27551"),
-            ("and_v(r:1,1)", "517551"),
-        ] {
-            assert!(Segwitv0Script::from_str_insane(miniscript).is_err());
-            assert!(Segwitv0Script::decode_consensus(&hex_script(script_hex)).is_err());
-        }
+        // Segwitv0 r: (OP_DROP) round-trips: Terminal::Drop carries no
+        // payload and stays legal outside taproot (CSHLD-2341).
+        roundtrip(
+            &ms_str!("and_v(r:after(1024),1)"),
+            "OP_PUSHBYTES_2 0004 OP_CLTV OP_DROP OP_PUSHNUM_1",
+        );
+        roundtrip(
+            &ms_str!("and_v(r:older(1024),1)"),
+            "OP_PUSHBYTES_2 0004 OP_CSV OP_DROP OP_PUSHNUM_1",
+        );
+        roundtrip(&ms_str!("and_v(r:1,1)"), "OP_PUSHNUM_1 OP_DROP OP_PUSHNUM_1");
 
         roundtrip(
             &ms_str!("sha256({})",sha256::Hash::hash(&[])),

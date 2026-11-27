@@ -234,6 +234,11 @@ impl<Pk: MiniscriptKey, Ctx: ScriptContext> Miniscript<Pk, Ctx> {
             .any(|ms| matches!(ms.node, Terminal::Drop(_) | Terminal::PayloadDrop(_)))
     }
 
+    /// Whether the given miniscript contains a payload_drop fragment
+    pub fn contains_payload_drop(&self) -> bool {
+        self.iter().any(|ms| matches!(ms.node, Terminal::PayloadDrop(_)))
+    }
+
     /// Check whether the underlying Miniscript is safe under the current context
     /// Lifting these polices would create a semantic representation that does
     /// not represent the underlying semantics when miniscript is spent.

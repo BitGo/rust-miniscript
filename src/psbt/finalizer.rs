@@ -765,7 +765,7 @@ mod tests {
     }
 
     #[test]
-    fn test_p2wsh_timelock_psbt_signing() {
+    fn test_opdrop_psbt_signing() {
         use std::str::FromStr;
 
         use bitcoin::sighash::{EcdsaSighashType, SighashCache};
@@ -787,10 +787,11 @@ mod tests {
         let pk3 =
             bitcoin::PublicKey::new(bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &sks[2]));
 
-        // Create a P2WSH timelock/multisig descriptor with a VERIFY wrapper.
+        // Create a P2WSH OP_DROP timelock/multisig descriptor (CoreDAO staking
+        // shape): r:after stays legal in Segwitv0 (CSHLD-2341).
         let locktime = 1024u32;
         let desc_str =
-            format!("wsh(and_v(v:after({}),multi(2,{},{},{})))", locktime, pk1, pk2, pk3);
+            format!("wsh(and_v(r:after({}),multi(2,{},{},{})))", locktime, pk1, pk2, pk3);
 
         // Parse as DescriptorPublicKey first, then get the concrete descriptor
         let desc_dpk = Descriptor::<DescriptorPublicKey>::from_str(&desc_str).unwrap();
